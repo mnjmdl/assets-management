@@ -1,0 +1,43 @@
+{
+  "name": "assets-management",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "start": "turbo run start --filter=@repo/api --filter=@repo/web",
+    "start:api": "npm run start --workspace=@repo/api",
+    "start:web": "npm run start --workspace=@repo/web",
+    "mobile:start": "npm run start --workspace=@repo/mobile",
+    "mobile:android": "npm run android --workspace=@repo/mobile",
+    "mobile:ios": "npm run ios --workspace=@repo/mobile",
+    "mobile:web": "npm run web --workspace=@repo/mobile",
+    "mobile:build:apk": "npm run build:apk --workspace=@repo/mobile",
+    "db:generate": "npm run db:generate --workspace=@repo/database",
+    "db:migrate": "npm run db:migrate --workspace=@repo/database",
+    "db:push": "npm run db:push --workspace=@repo/database",
+    "db:import-excel": "node scripts/import-excel.js",
+    "db:clear-assets": "node scripts/clear-assets.js",
+    "db:admin": "node scripts/create-admin.js",
+    "create-admin": "node scripts/create-admin.js",
+    "db:docker": "docker compose up -d",
+    "db:docker:down": "docker compose down",
+    "db:studio": "npm run studio --workspace=@repo/database",
+    "lint": "turbo run lint",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\""
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "packageManager": "npm@11.12.1"
+}

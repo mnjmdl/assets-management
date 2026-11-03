@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "Crystal Martin Assets",
+    "slug": "crystal-martin-assets",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.crystalmartin.assets",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow Crystal Martin Assets to access your camera to scan asset barcodes and capture equipment condition photos.",
+        "NSPhotoLibraryUsageDescription": "Allow Crystal Martin Assets to access your photos to attach equipment inspection records."
+      }
+    },
+    "android": {
+      "package": "com.crystalmartin.assets",
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "VIBRATE"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#1e3a8a",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Crystal Martin Assets to access your camera to scan asset barcodes and capture equipment condition photos."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app accesses your photos to upload equipment condition images."
+        }
+      ],
+      "expo-audio"
+    ]
+  }
+}

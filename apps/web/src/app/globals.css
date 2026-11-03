@@ -1,0 +1,239 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221.2 83.2% 53.3%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 224.3 76.3% 48%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    overscroll-behavior-y: none;
+  }
+}
+
+/* PWA Mobile Safe Area Inset Helpers */
+.safe-bottom {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+.safe-top {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+}
+
+/* Print Styles: Support both tag placards and full document / PDF printing */
+@media print {
+  @page {
+    margin: 10mm;
+    size: auto;
+  }
+
+  /* Reset layout constraints and overflows so documents paginate across pages cleanly */
+  html,
+  body,
+  main,
+  div {
+    overflow: visible !important;
+    height: auto !important;
+  }
+
+  /* Always hide headers, sidebars, bottom navbars, and interactive buttons */
+  header,
+  aside,
+  nav,
+  .no-print,
+  .print-hidden,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* Ensure text, borders and backgrounds print with crisp contrast */
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* When printing an isolated tag placard modal with .print-area */
+  body:has(.print-area) * {
+    visibility: hidden !important;
+  }
+  body:has(.print-area) .print-area,
+  body:has(.print-area) .print-area * {
+    visibility: visible !important;
+  }
+
+  /* Full document print view (Workflow Manual, Reports) */
+  .print-doc,
+  .print-doc *,
+  .print-area.print-doc,
+  .print-area.print-doc * {
+    visibility: visible !important;
+  }
+
+  .print-doc,
+  .print-area.print-doc {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    z-index: auto !important;
+  }
+
+  .print-doc .border,
+  .print-doc [class*="border"] {
+    border-color: #cbd5e1 !important;
+  }
+
+  .print-doc .text-muted-foreground {
+    color: #475569 !important;
+  }
+
+  .print-doc .bg-card,
+  .print-doc .bg-muted\/20,
+  .print-doc .bg-muted\/10 {
+    background: #ffffff !important;
+  }
+
+  /* Position print area cleanly on paper with clean white background across multi-page print runs */
+  .print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    min-height: 100% !important;
+    background: #ffffff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    z-index: 999999 !important;
+  }
+
+  /* Single Tag Box Centering */
+  .single-tag-center {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 80vh !important;
+    width: 100% !important;
+  }
+
+  .print-tag-box {
+    border: 2px solid #0f172a !important;
+    border-radius: 14px !important;
+    padding: 20px !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    box-shadow: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    width: auto !important;
+    max-width: 320px !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .print-tag-box img {
+    max-width: 200px !important;
+    height: auto !important;
+  }
+
+  .print-tag-box span {
+    color: #0f172a !important;
+  }
+
+  /* Bulk Tag Sticker Sheet Grid: 3 columns of compact scannable stickers */
+  .bulk-print-grid {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 12px !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .bulk-tag-card {
+    border: 1.5px solid #0f172a !important;
+    border-radius: 10px !important;
+    padding: 10px !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .bulk-tag-card img {
+    width: 130px !important;
+    height: 130px !important;
+    object-fit: contain !important;
+  }
+
+  .bulk-tag-card span {
+    color: #0f172a !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
+

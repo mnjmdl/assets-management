@@ -1,0 +1,574 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Prisma Schema — Assets Management & Auditing System
+// Database: Microsoft SQL Server
+// Note: SQL Server does not support native enums or multiple cascade paths.
+// String types are used for enums (mirrored in @repo/types) and referential
+// actions explicitly set to NoAction to comply with MSSQL error 1785.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../generated/client"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTH & USERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  employeeId   String?
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         String    @default("EMPLOYEE") // Role enum in @repo/types
+  phone        String?
+  avatarUrl    String?
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  department        Department? @relation("DepartmentMembers", fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  departmentId      String?
+  managedDepartment Department? @relation("DepartmentManager")
+
+  // Asset relations
+  assignedAssets     AssetAssignment[]    @relation("AssignedToUser")
+  createdAssignments AssetAssignment[]    @relation("AssignmentCreatedBy")
+  statusChanges      AssetStatusHistory[] @relation("StatusChangedBy")
+  transfersRequested AssetTransfer[]      @relation("TransferRequested")
+  transfersApproved  AssetTransfer[]      @relation("TransferApproved")
+
+  // Audit relations
+  auditPlansCreated     AuditPlan[]        @relation("AuditPlanCreatedBy")
+  auditSessions         AuditSession[]     @relation("AuditorSession")
+  auditReviewed         AuditSession[]     @relation("AuditReviewedBy")
+  discrepanciesResolved AuditDiscrepancy[] @relation("DiscrepancyResolvedBy")
+
+  // Maintenance relations
+  maintenancePerformed MaintenanceRecord[] @relation("MaintenancePerformedBy")
+
+  // Other
+  notifications Notification[]
+  auditTrail    AuditTrail[]
+  refreshTokens RefreshToken[]
+  createdAssets Asset[]        @relation("AssetCreatedBy")
+  updatedAssets Asset[]        @relation("AssetUpdatedBy")
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ORGANIZATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Department {
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Self-referential hierarchy
+  parentId String?
+  parent   Department?  @relation("DepartmentHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children Department[] @relation("DepartmentHierarchy")
+
+  // Manager
+  managerId String? @unique
+  manager   User?   @relation("DepartmentManager", fields: [managerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  members   User[]  @relation("DepartmentMembers")
+
+  // Asset relations
+  assignments   AssetAssignment[] @relation("AssignedToDept")
+  transfersFrom AssetTransfer[]   @relation("TransferFromDept")
+  transfersTo   AssetTransfer[]   @relation("TransferToDept")
+  assets        Asset[]           @relation("AssetDepartment")
+
+  @@map("departments")
+}
+
+model Location {
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique
+  type        String   @default("LINE") // LocationType: COMPANY | UNIT | BLOCK | LINE
+  qrCode      String?
+  building    String?
+  floor       String?
+  room        String?
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Self-referential hierarchy: Company > Unit > Block > Line
+  parentId String?
+  parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children Location[] @relation("LocationHierarchy")
+
+  assets          Asset[]
+  assignments     AssetAssignment[]
+  auditSessions   AuditSession[]
+  auditItems      AuditItem[]       @relation("AuditItemExpectedLocation")
+  auditItemsFound AuditItem[]       @relation("AuditItemFoundLocation")
+
+  @@map("locations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSET CATEGORIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AssetCategory {
+  id                String   @id @default(cuid())
+  name              String
+  code              String   @unique
+  description       String?
+  customFieldSchema String? // JSON schema for custom fields
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Self-referential
+  parentId String?
+  parent   AssetCategory?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children AssetCategory[] @relation("CategoryHierarchy")
+
+  assets Asset[]
+
+  @@map("asset_categories")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Asset {
+  id           String  @id @default(cuid())
+  assetCode    String  @unique // e.g. AST-2024-00001
+  sapAssetCode String  @unique
+  name         String
+  description  String?
+  status       String  @default("DRAFT") // AssetStatus enum in @repo/types
+
+  // Classification
+  categoryId String
+  category   AssetCategory @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // Physical details
+  serialNumber String?
+  model        String?
+  manufacturer String?
+  color        String?
+  condition    String? // Good / Fair / Poor
+
+  // Financial
+  purchaseDate       DateTime?
+  purchaseCost       Decimal?  @db.Decimal(18, 2)
+  currentValue       Decimal?  @db.Decimal(18, 2)
+  depreciationMethod String    @default("STRAIGHT_LINE") // DepreciationMethod enum in @repo/types
+  depreciationRate   Decimal?  @db.Decimal(5, 2) // % per year
+  usefulLifeYears    Int?
+
+  // Vendor & Warranty
+  vendorId        String?
+  vendor          Vendor?   @relation(fields: [vendorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  invoiceNumber   String?
+  warrantyExpiry  DateTime?
+  warrantyDetails String?
+
+  // Location & Department
+  locationId   String?
+  location     Location?   @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  departmentId String?
+  department   Department? @relation("AssetDepartment", fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // QR / Barcode
+  qrCode  String?
+  barcode String?
+
+  // Custom fields (JSON)
+  customFields String? // JSON object matching category schema
+
+  // Notes
+  notes    String?
+  isActive Boolean @default(true)
+
+  // Audit
+  createdById String
+  createdBy   User     @relation("AssetCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  updatedById String?
+  updatedBy   User?    @relation("AssetUpdatedBy", fields: [updatedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  photos               AssetPhoto[]
+  documents            AssetDocument[]
+  assignments          AssetAssignment[]
+  statusHistory        AssetStatusHistory[]
+  transfers            AssetTransfer[]
+  maintenanceSchedules MaintenanceSchedule[]
+  maintenanceRecords   MaintenanceRecord[]
+  auditItems           AuditItem[]
+
+  @@map("assets")
+}
+
+model AssetPhoto {
+  id         String   @id @default(cuid())
+  assetId    String
+  asset      Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  filePath   String
+  fileName   String
+  fileSize   Int
+  mimeType   String
+  isPrimary  Boolean  @default(false)
+  uploadedAt DateTime @default(now())
+
+  @@map("asset_photos")
+}
+
+model AssetDocument {
+  id           String   @id @default(cuid())
+  assetId      String
+  asset        Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  docType      String // Invoice, Warranty, Manual, Certificate, Other
+  fileName     String
+  filePath     String
+  fileSize     Int
+  mimeType     String
+  uploadedById String
+  uploadedAt   DateTime @default(now())
+
+  @@map("asset_documents")
+}
+
+model AssetStatusHistory {
+  id          String   @id @default(cuid())
+  assetId     String
+  asset       Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  oldStatus   String? // AssetStatus enum in @repo/types
+  newStatus   String // AssetStatus enum in @repo/types
+  changedById String
+  changedBy   User     @relation("StatusChangedBy", fields: [changedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reason      String?
+  notes       String?
+  changedAt   DateTime @default(now())
+
+  @@map("asset_status_history")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSIGNMENTS & CUSTODY
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AssetAssignment {
+  id      String @id @default(cuid())
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // Assigned to (at least one must be set)
+  assignedToUserId String?
+  assignedToUser   User?       @relation("AssignedToUser", fields: [assignedToUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  assignedToDeptId String?
+  assignedToDept   Department? @relation("AssignedToDept", fields: [assignedToDeptId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  locationId       String?
+  location         Location?   @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // Metadata
+  assignedById     String
+  assignedBy       User      @relation("AssignmentCreatedBy", fields: [assignedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  assignedAt       DateTime  @default(now())
+  expectedReturnAt DateTime?
+  returnedAt       DateTime?
+
+  // Condition
+  conditionOut String? // Condition when handed out
+  conditionIn  String? // Condition when returned
+
+  // Acknowledgement
+  acknowledged   Boolean   @default(false)
+  acknowledgedAt DateTime?
+  signatureUrl   String? // Digital signature image path
+
+  notes     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("asset_assignments")
+}
+
+model AssetTransfer {
+  id            String      @id @default(cuid())
+  assetId       String
+  asset         Asset       @relation(fields: [assetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fromDeptId    String?
+  fromDept      Department? @relation("TransferFromDept", fields: [fromDeptId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  toDeptId      String?
+  toDept        Department? @relation("TransferToDept", fields: [toDeptId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  requestedById String
+  requestedBy   User        @relation("TransferRequested", fields: [requestedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  approvedById  String?
+  approvedBy    User?       @relation("TransferApproved", fields: [approvedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  status        String      @default("PENDING") // TransferStatus enum in @repo/types
+  reason        String?
+  notes         String?
+  requestedAt   DateTime    @default(now())
+  approvedAt    DateTime?
+  completedAt   DateTime?
+
+  @@map("asset_transfers")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VENDORS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Vendor {
+  id            String   @id @default(cuid())
+  name          String
+  code          String   @unique
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  website       String?
+  serviceTypes  String? // Comma-separated: Supplier, Repair, Maintenance
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  assets               Asset[]
+  maintenanceSchedules MaintenanceSchedule[]
+  maintenanceRecords   MaintenanceRecord[]
+
+  @@map("vendors")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAINTENANCE
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MaintenanceSchedule {
+  id            String    @id @default(cuid())
+  assetId       String
+  asset         Asset     @relation(fields: [assetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  type          String // MaintenanceType enum in @repo/types
+  title         String
+  description   String?
+  frequencyDays Int? // Every N days
+  nextDueDate   DateTime?
+  lastDoneDate  DateTime?
+  vendorId      String?
+  vendor        Vendor?   @relation(fields: [vendorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  estimatedCost Decimal?  @db.Decimal(18, 2)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  records MaintenanceRecord[]
+
+  @@map("maintenance_schedules")
+}
+
+model MaintenanceRecord {
+  id            String               @id @default(cuid())
+  assetId       String
+  asset         Asset                @relation(fields: [assetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  scheduleId    String?
+  schedule      MaintenanceSchedule? @relation(fields: [scheduleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  type          String // MaintenanceType enum in @repo/types
+  status        String               @default("SCHEDULED") // MaintenanceStatus enum in @repo/types
+  title         String
+  description   String?
+  performedById String?
+  performedBy   User?                @relation("MaintenancePerformedBy", fields: [performedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vendorId      String?
+  vendor        Vendor?              @relation(fields: [vendorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  scheduledAt   DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  cost          Decimal?             @db.Decimal(18, 2)
+  invoiceRef    String?
+  notes         String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@map("maintenance_records")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDITS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AuditPlan {
+  id            String    @id @default(cuid())
+  name          String
+  description   String?
+  type          String    @default("SCHEDULED") // AuditType enum in @repo/types
+  status        String    @default("DRAFT") // AuditPlanStatus enum in @repo/types
+  scheduledDate DateTime?
+
+  // Scope: what to audit
+  scopeType String // ALL | DEPARTMENT | LOCATION | CATEGORY
+  scopeIds  String? // JSON array of dept/location/category IDs
+
+  createdById String
+  createdBy   User     @relation("AuditPlanCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sessions AuditSession[]
+
+  @@map("audit_plans")
+}
+
+model AuditSession {
+  id           String    @id @default(cuid())
+  planId       String
+  plan         AuditPlan @relation(fields: [planId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  auditorId    String
+  auditor      User      @relation("AuditorSession", fields: [auditorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  locationId   String?
+  location     Location? @relation(fields: [locationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  status       String    @default("NOT_STARTED") // AuditSessionStatus enum in @repo/types
+  startedAt    DateTime?
+  submittedAt  DateTime?
+  reviewedAt   DateTime?
+  reviewedById String?
+  reviewedBy   User?     @relation("AuditReviewedBy", fields: [reviewedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  items         AuditItem[]
+  discrepancies AuditDiscrepancy[]
+
+  @@index([status])
+  @@index([planId])
+  @@index([updatedAt])
+  @@map("audit_sessions")
+}
+
+model AuditItem {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   AuditSession @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  assetId   String
+  asset     Asset        @relation(fields: [assetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // Expected vs Found
+  expectedLocationId String?
+  expectedLocation   Location? @relation("AuditItemExpectedLocation", fields: [expectedLocationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  foundLocationId    String?
+  foundLocation      Location? @relation("AuditItemFoundLocation", fields: [foundLocationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  status    String    @default("PENDING") // AuditItemStatus enum in @repo/types
+  condition String? // Good / Fair / Poor / Damaged
+  notes     String?
+  photoPath String?
+  scannedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  discrepancy AuditDiscrepancy?
+
+  @@unique([sessionId, assetId])
+  @@index([sessionId])
+  @@index([status])
+  @@map("audit_items")
+}
+
+model AuditDiscrepancy {
+  id              String       @id @default(cuid())
+  sessionId       String
+  session         AuditSession @relation(fields: [sessionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  assetId         String
+  auditItemId     String       @unique
+  auditItem       AuditItem    @relation(fields: [auditItemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  discrepancyType String // DiscrepancyType enum in @repo/types
+  description     String?
+  resolvedById    String?
+  resolvedBy      User?        @relation("DiscrepancyResolvedBy", fields: [resolvedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  resolvedAt      DateTime?
+  resolutionNotes String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([sessionId])
+  @@map("audit_discrepancies")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATIONS & AUDIT TRAIL
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  type      String // NotificationType enum in @repo/types
+  title     String
+  message   String
+  isRead    Boolean   @default(false)
+  refId     String? // ID of referenced record (assetId, auditId, etc.)
+  refType   String? // Type of referenced record
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+
+  @@map("notifications")
+}
+
+model AuditTrail {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  action    String // CREATE | UPDATE | DELETE | LOGIN | LOGOUT | etc.
+  module    String // Asset | Audit | User | Assignment | etc.
+  recordId  String?
+  oldValues String? // JSON snapshot before change
+  newValues String? // JSON snapshot after change
+  ipAddress String?
+  userAgent String?
+  timestamp DateTime @default(now())
+
+  @@map("audit_trail")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SYSTEM
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}

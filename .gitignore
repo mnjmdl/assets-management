@@ -1,0 +1,9 @@
+node_modules
+.turbo
+dist
+.next
+*.log
+.env
+.env.local
+uploads/
+generated/
