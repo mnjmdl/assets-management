@@ -7,3 +7,5 @@ dist
 .env.local
 uploads/
 generated/
+deploy/
+deploy-iis.zip

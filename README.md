@@ -62,15 +62,13 @@ assets-management/
 
 ## 🚀 Getting Started
 
-## Copy to Server command
-cd /Volumes/CORSAIR && rsync -avz --progress \
-  --exclude '.git' \
-  --exclude 'node_modules' \
-  --exclude '.next' \
-  --exclude '.turbo' \
-  --exclude '.expo' \
-  --exclude '.DS_Store' \
-  assets-management administrator@192.168.65.50:   
+👉 **Production IIS Hosting Guide**: See complete step-by-step instructions in [`docs/IIS_CONFIG.md`](docs/IIS_CONFIG.md).
+
+### One-Command Standalone Production Build (Zero Server NPM Install)
+```bash
+npm run package:standalone
+# Creates deploy-iis.zip (132 MB) containing self-contained Web, API, and Windows Prisma engine.
+```
 
 ### Prerequisites
 - Node.js 20+

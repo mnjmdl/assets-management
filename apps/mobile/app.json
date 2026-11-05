@@ -2,7 +2,7 @@
   "expo": {
     "name": "Crystal Martin Assets",
     "slug": "crystal-martin-assets",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -16,6 +16,7 @@
     },
     "android": {
       "package": "com.crystalmartin.assets",
+      "versionCode": 2,
       "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.CAMERA",
@@ -39,6 +40,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/withAndroidCertificates.js",
       [
         "expo-camera",
         {

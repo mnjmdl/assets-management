@@ -1,8 +1,8 @@
 export const DEFAULT_PRODUCTION_API_URL =
-  process.env.EXPO_PUBLIC_API_URL || 'https://app.bd.crystal-martin.com/assets/api/v1';
+  process.env.EXPO_PUBLIC_API_URL || 'https://app.bd.crystal-martin.com:8443/api/v1';
 
 export const DEFAULT_LOCAL_API_URL =
-  process.env.EXPO_PUBLIC_LOCAL_API_URL || 'http://localhost:3001/api/v1';
+  process.env.EXPO_PUBLIC_LOCAL_API_URL || 'http://192.168.65.50:3001/api/v1';
 
 export const INITIAL_API_URL =
   typeof __DEV__ !== 'undefined' && __DEV__
