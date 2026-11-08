@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
-  Image,
   StyleSheet,
   Animated,
   Easing,
@@ -204,7 +203,7 @@ export const AnimatedSplashScreen: React.FC<AnimatedSplashScreenProps> = ({
           ]}
         />
 
-        {/* Authentic Crystal Martin Logo Badge */}
+        {/* Authentic Crystal Martin Monogram Badge (No external image) */}
         <Animated.View
           style={[
             styles.logoContainer,
@@ -215,11 +214,7 @@ export const AnimatedSplashScreen: React.FC<AnimatedSplashScreenProps> = ({
           ]}
         >
           <View style={styles.logoCard}>
-            <Image
-              source={require('../../assets/android-icon-foreground.png')}
-              style={styles.logoImage}
-              resizeMode="contain"
-            />
+            <Text style={styles.monogramText}>CM</Text>
           </View>
         </Animated.View>
 
@@ -312,9 +307,11 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  logoImage: {
-    width: 90,
-    height: 90,
+  monogramText: {
+    fontSize: 40,
+    fontWeight: '900',
+    color: '#2563eb',
+    letterSpacing: 2,
   },
   textContainer: {
     alignItems: 'center',

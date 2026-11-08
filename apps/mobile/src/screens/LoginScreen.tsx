@@ -68,11 +68,9 @@ export const LoginScreen = () => {
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Brand Header */}
         <View style={styles.header}>
-          <Image
-            source={require('../../assets/icon.png')}
-            style={styles.logoBadge}
-            resizeMode="cover"
-          />
+          <View style={styles.logoBadge}>
+            <Text style={styles.monogramText}>CM</Text>
+          </View>
           <Text style={styles.brandTitle}>Crystal Martin</Text>
           <Text style={styles.brandSubtitle}>Asset Lifecycle Management & Auditing</Text>
         </View>
@@ -271,12 +269,20 @@ const styles = StyleSheet.create({
   logoBadge: {
     width: 64,
     height: 64,
-    borderRadius: 16,
-    overflow: 'hidden',
+    borderRadius: 18,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1.5,
+    borderColor: '#bfdbfe',
+    justifyContent: 'center',
+    alignItems: 'center',
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
     ...theme.shadows.card,
+  },
+  monogramText: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#2563eb',
+    letterSpacing: 1.5,
   },
   brandTitle: {
     fontSize: 22,
