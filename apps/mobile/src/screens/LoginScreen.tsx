@@ -10,7 +10,9 @@ import {
   Platform,
   ScrollView,
   Modal,
+  Image,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_PRODUCTION_API_URL, DEFAULT_LOCAL_API_URL } from '../config/env';
 import { theme } from '../config/theme';
@@ -58,16 +60,19 @@ export const LoginScreen = () => {
   const isLocal = serverUrl === DEFAULT_LOCAL_API_URL;
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Brand Header */}
         <View style={styles.header}>
-          <View style={styles.logoBadge}>
-            <Text style={styles.logoBadgeText}>CM</Text>
-          </View>
+          <Image
+            source={require('../../assets/icon.png')}
+            style={styles.logoBadge}
+            resizeMode="cover"
+          />
           <Text style={styles.brandTitle}>Crystal Martin</Text>
           <Text style={styles.brandSubtitle}>Asset Lifecycle Management & Auditing</Text>
         </View>
@@ -177,6 +182,7 @@ export const LoginScreen = () => {
           <Text style={styles.footerSubtext}>Crystal Martin Bangladesh Ltd.</Text>
         </View>
       </ScrollView>
+    </KeyboardAvoidingView>
 
       {/* Server Configuration Modal */}
       <Modal
@@ -244,7 +250,7 @@ export const LoginScreen = () => {
           </View>
         </View>
       </Modal>
-    </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
@@ -263,19 +269,14 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   logoBadge: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: theme.colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    overflow: 'hidden',
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
     ...theme.shadows.card,
-  },
-  logoBadgeText: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: '800',
   },
   brandTitle: {
     fontSize: 22,

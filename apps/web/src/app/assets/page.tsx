@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import useSWR from 'swr';
 import Link from 'next/link';
 import QRCode from 'qrcode';
 import {
@@ -25,6 +26,8 @@ import {
   Square,
   ArrowLeftRight,
   Pencil,
+  MapPin,
+  RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -111,13 +114,59 @@ function AssetQrThumbnail({ code, className }: { code: string; className?: strin
 
 export default function AssetsPage() {
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
-  const [assets, setAssets] = useState<AssetRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [totalCount, setTotalCount] = useState(0);
+  const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
+  const [selectedLocation, setSelectedLocation] = useState<string>('ALL');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
-  const [totalPages, setTotalPages] = useState(1);
+
+  // Load reference options (categories and locations)
+  const { data: refData } = useSWR('/api/assets/reference-options');
+  const categories: Array<{ id: string; name: string }> =
+    refData?.data?.categories || refData?.categories || [];
+  const locations: Array<{ id: string; name: string; code?: string; type?: string }> =
+    refData?.data?.locations || refData?.locations || [];
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const queryString = useMemo(() => {
+    const q = new URLSearchParams();
+    if (debouncedSearch) q.append('search', debouncedSearch);
+    if (selectedStatus !== 'ALL') q.append('status', selectedStatus);
+    if (selectedCategory !== 'ALL') q.append('categoryId', selectedCategory);
+    if (selectedLocation !== 'ALL') q.append('locationId', selectedLocation);
+    q.append('page', String(page));
+    q.append('limit', String(limit));
+    return q.toString();
+  }, [debouncedSearch, selectedStatus, selectedCategory, selectedLocation, page, limit]);
+
+  const { data: assetsRes, isLoading, mutate: mutateAssets } = useSWR(`/api/assets?${queryString}`);
+
+  const assets: AssetRecord[] = assetsRes?.data || [];
+  const totalCount = assetsRes?.meta?.total ?? (assetsRes?.data ? assetsRes.data.length : 0);
+  const totalPages = assetsRes?.meta?.totalPages ?? Math.max(1, Math.ceil(totalCount / limit));
+  const loading = isLoading && !assetsRes;
+
+  const hasActiveFilters =
+    selectedCategory !== 'ALL' ||
+    selectedLocation !== 'ALL' ||
+    selectedStatus !== 'ALL' ||
+    Boolean(search);
+
+  const handleResetFilters = () => {
+    setSearch('');
+    setSelectedStatus('ALL');
+    setSelectedCategory('ALL');
+    setSelectedLocation('ALL');
+    setPage(1);
+  };
 
   // Enlarged QR Placard Modal
   const [selectedQrAsset, setSelectedQrAsset] = useState<AssetRecord | null>(null);
@@ -194,6 +243,8 @@ export default function AssetsPage() {
       const query = new URLSearchParams();
       if (search) query.append('search', search);
       if (selectedStatus !== 'ALL') query.append('status', selectedStatus);
+      if (selectedCategory !== 'ALL') query.append('categoryId', selectedCategory);
+      if (selectedLocation !== 'ALL') query.append('locationId', selectedLocation);
 
       const res = await fetch(`/api/assets/export-excel?${query.toString()}`);
       if (!res.ok) throw new Error('Failed to export Excel file');
@@ -253,53 +304,6 @@ export default function AssetsPage() {
     }
     return pages;
   };
-
-  useEffect(() => {
-    let isCancelled = false;
-    const fetchAssets = async () => {
-      setLoading(true);
-      try {
-        const query = new URLSearchParams();
-        if (search) query.append('search', search);
-        if (selectedStatus !== 'ALL') query.append('status', selectedStatus);
-        query.append('page', String(page));
-        query.append('limit', String(limit));
-
-        const res = await fetch(`/api/assets?${query.toString()}`);
-        if (res.ok) {
-          const json = await res.json();
-          if (!isCancelled) {
-            setAssets(json.data || []);
-            const total = json.meta?.total ?? (json.data ? json.data.length : 0);
-            setTotalCount(total);
-            setTotalPages(json.meta?.totalPages ?? Math.max(1, Math.ceil(total / limit)));
-          }
-        } else {
-          if (!isCancelled) {
-            setAssets([]);
-            setTotalCount(0);
-            setTotalPages(1);
-          }
-        }
-      } catch (e) {
-        if (!isCancelled) {
-          setAssets([]);
-          setTotalCount(0);
-          setTotalPages(1);
-        }
-      } finally {
-        if (!isCancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    const timer = setTimeout(fetchAssets, 250);
-    return () => {
-      isCancelled = true;
-      clearTimeout(timer);
-    };
-  }, [search, selectedStatus, page, limit]);
 
   // Generate large high-res QR code and complete printable placard for modal
   useEffect(() => {
@@ -414,38 +418,120 @@ export default function AssetsPage() {
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="relative">
-        <Search className="absolute left-3.5 top-3 w-4 h-4 text-muted-foreground" />
-        <Input
-          placeholder="Search by equipment name, Tag ID (ABL-...), or SAP Code (1000...)"
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(1);
-          }}
-          className="pl-10 h-11 bg-card"
-        />
-      </div>
-
-      {/* Filter Pills Horizontal Scroll */}
-      <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
-        {statuses.map((s) => (
-          <button
-            key={s.value}
-            onClick={() => {
-              setSelectedStatus(s.value);
+      {/* Search & Filters Toolbar */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5">
+        {/* Search Bar */}
+        <div className="relative lg:col-span-6">
+          <Search className="absolute left-3.5 top-3 w-4 h-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by equipment name, Tag ID (ABL-...), or SAP Code (1000...)"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
               setPage(1);
             }}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-              selectedStatus === s.value
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+            className="pl-10 pr-9 h-11 bg-card text-xs sm:text-sm"
+          />
+          {search ? (
+            <button
+              onClick={() => {
+                setSearch('');
+                setPage(1);
+              }}
+              className="absolute right-3 top-3 text-muted-foreground hover:text-foreground p-0.5"
+              title="Clear search"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          ) : null}
+        </div>
+
+        {/* Category Filter */}
+        <div className="relative lg:col-span-3">
+          <Boxes className="absolute left-3 top-3.5 w-4 h-4 text-muted-foreground pointer-events-none" />
+          <select
+            value={selectedCategory}
+            onChange={(e) => {
+              setSelectedCategory(e.target.value);
+              setPage(1);
+            }}
+            className={`w-full h-11 pl-9 pr-8 text-xs sm:text-sm font-medium bg-card border rounded-md shadow-2xs focus:outline-none focus:ring-2 focus:ring-primary/20 appearance-none cursor-pointer transition-colors ${
+              selectedCategory !== 'ALL'
+                ? 'border-primary text-primary font-semibold'
+                : 'text-foreground'
             }`}
           >
-            {s.label}
+            <option value="ALL">All Categories ({categories.length})</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <div className="absolute right-3 top-3.5 pointer-events-none text-muted-foreground text-[10px]">
+            ▼
+          </div>
+        </div>
+
+        {/* Location Filter */}
+        <div className="relative lg:col-span-3">
+          <MapPin className="absolute left-3 top-3.5 w-4 h-4 text-muted-foreground pointer-events-none" />
+          <select
+            value={selectedLocation}
+            onChange={(e) => {
+              setSelectedLocation(e.target.value);
+              setPage(1);
+            }}
+            className={`w-full h-11 pl-9 pr-8 text-xs sm:text-sm font-medium bg-card border rounded-md shadow-2xs focus:outline-none focus:ring-2 focus:ring-primary/20 appearance-none cursor-pointer transition-colors ${
+              selectedLocation !== 'ALL'
+                ? 'border-primary text-primary font-semibold'
+                : 'text-foreground'
+            }`}
+          >
+            <option value="ALL">All Locations ({locations.length})</option>
+            {locations.map((loc) => (
+              <option key={loc.id} value={loc.id}>
+                {loc.name} {loc.code ? `(${loc.code})` : ''} {loc.type ? `• ${loc.type}` : ''}
+              </option>
+            ))}
+          </select>
+          <div className="absolute right-3 top-3.5 pointer-events-none text-muted-foreground text-[10px]">
+            ▼
+          </div>
+        </div>
+      </div>
+
+      {/* Filter Status Pills & Reset Button */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
+          {statuses.map((s) => (
+            <button
+              key={s.value}
+              onClick={() => {
+                setSelectedStatus(s.value);
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                selectedStatus === s.value
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {hasActiveFilters && (
+          <button
+            onClick={handleResetFilters}
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground bg-muted/60 hover:bg-muted px-2.5 py-1.5 rounded-md transition-colors shrink-0 font-medium"
+            title="Reset all search & filters"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Reset Filters</span>
           </button>
-        ))}
+        )}
       </div>
 
       {/* Loading Shimmer State */}
@@ -717,24 +803,33 @@ export default function AssetsPage() {
                 No Assets in Inventory
               </h2>
               <p className="text-xs sm:text-sm text-muted-foreground">
-                {search || selectedStatus !== 'ALL'
-                  ? 'No records match your current search criteria or status filter.'
+                {hasActiveFilters
+                  ? 'No records match your active search, category, location, or status filters.'
                   : 'Your equipment inventory is currently clean. Import your enterprise schedule (FA List ABL 2026.xlsx) to populate real fixed assets.'}
               </p>
             </div>
             <div className="flex flex-col sm:flex-row items-center gap-2.5 pt-2">
-              <Link href="/assets/import">
-                <Button className="gap-2 h-10 shadow-sm">
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>Import Excel List</span>
+              {hasActiveFilters ? (
+                <Button variant="outline" onClick={handleResetFilters} className="gap-2 h-10 shadow-2xs">
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Reset All Filters</span>
                 </Button>
-              </Link>
-              <Link href="/assets/new">
-                <Button variant="outline" className="gap-2 h-10">
-                  <Plus className="w-4 h-4" />
-                  <span>Register Manually</span>
-                </Button>
-              </Link>
+              ) : (
+                <>
+                  <Link href="/assets/import">
+                    <Button className="gap-2 h-10 shadow-sm">
+                      <FileSpreadsheet className="w-4 h-4" />
+                      <span>Import Excel List</span>
+                    </Button>
+                  </Link>
+                  <Link href="/assets/new">
+                    <Button variant="outline" className="gap-2 h-10">
+                      <Plus className="w-4 h-4" />
+                      <span>Register Manually</span>
+                    </Button>
+                  </Link>
+                </>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -1014,10 +1109,8 @@ export default function AssetsPage() {
         asset={editingAsset as any}
         isOpen={!!editingAsset}
         onClose={() => setEditingAsset(null)}
-        onSuccess={(updated) => {
-          setAssets((prev) =>
-            prev.map((item) => (item.id === updated.id ? { ...item, ...(updated as any) } : item))
-          );
+        onSuccess={() => {
+          mutateAssets();
           setEditingAsset(null);
         }}
       />

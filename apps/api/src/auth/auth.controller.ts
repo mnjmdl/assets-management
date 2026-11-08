@@ -5,6 +5,7 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { Role } from '@repo/types';
 import { AuthService } from './auth.service';
 import { Auth } from '../common/decorators/auth.decorator';
+import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -16,6 +17,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login with email and password' })
   login(@Body() dto: LoginDto) {
@@ -23,6 +25,7 @@ export class AuthController {
   }
 
   @Post('register')
+  @Public()
   @ApiOperation({ summary: 'Register a new user (admin only in production)' })
   register(@Body() dto: RegisterDto) {
     return this.authService.register({
@@ -32,6 +35,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh access token' })
   refresh(@Body() dto: RefreshTokenDto) {

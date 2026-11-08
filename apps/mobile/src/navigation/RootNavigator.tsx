@@ -11,6 +11,7 @@ import { DashboardScreen } from '../screens/DashboardScreen';
 import { AssetsScreen } from '../screens/AssetsScreen';
 import { ScanScreen } from '../screens/ScanScreen';
 import { AuditScreen } from '../screens/AuditScreen';
+import { AuditPlansScreen } from '../screens/AuditPlansScreen';
 import { AssetDetailScreen } from '../screens/AssetDetailScreen';
 import { AuditDetailScreen } from '../screens/AuditDetailScreen';
 import { SessionInventoryScreen } from '../screens/SessionInventoryScreen';
@@ -20,18 +21,20 @@ import { theme } from '../config/theme';
 
 export type RootStackParamList = {
   Login: undefined;
-  MainTabs: undefined;
+  MainTabs: { screen?: string; params?: any } | undefined;
   AssetDetail: { assetCode?: string; assetId?: string };
-  AuditDetail: { planId: string; planName?: string; initialSessionId?: string };
-  SessionInventory: { sessionId: string; session?: any };
+  AuditDetail: { planId: string; planName?: string; initialSessionId?: string; isScanMode?: boolean };
+  SessionInventory: { sessionId: string; session?: any; autoScan?: boolean };
   LocationTree: undefined;
+  AuditStation?: { initialLocation?: any; initialSession?: any; planId?: string };
+  StandaloneScan?: undefined;
 };
 
 export type MainTabParamList = {
   Home: undefined;
   Assets: undefined;
-  Scan: undefined;
-  Audits: undefined;
+  Scan: { isScanMode?: boolean } | undefined;
+  Audits: { isScanMode?: boolean } | undefined;
   Profile: undefined;
 };
 
@@ -107,7 +110,8 @@ const MainTabs = () => {
 
       <Tab.Screen
         name="Scan"
-        component={ScanScreen}
+        component={AuditPlansScreen}
+        initialParams={{ isScanMode: true }}
         options={{
           tabBarLabel: 'Scan',
           tabBarIcon: ({ color, focused }) => (
@@ -122,7 +126,7 @@ const MainTabs = () => {
 
       <Tab.Screen
         name="Audits"
-        component={AuditScreen}
+        component={AuditPlansScreen}
         options={{
           tabBarLabel: 'Audits',
           tabBarIcon: ({ color, focused }) => (
@@ -179,6 +183,8 @@ export const RootNavigator = () => {
             <Stack.Screen name="AuditDetail" component={AuditDetailScreen} />
             <Stack.Screen name="SessionInventory" component={SessionInventoryScreen} />
             <Stack.Screen name="LocationTree" component={LocationTreeScreen} />
+            <Stack.Screen name="AuditStation" component={AuditScreen} />
+            <Stack.Screen name="StandaloneScan" component={ScanScreen} />
           </>
         ) : (
           <Stack.Screen name="Login" component={LoginScreen} />

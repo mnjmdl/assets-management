@@ -1,0 +1,40 @@
+# =============================================================================
+# Multi-Stage Production Dockerfile for NestJS Backend API
+# =============================================================================
+
+FROM node:20-bookworm-slim AS base
+WORKDIR /app
+RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+FROM base AS builder
+WORKDIR /app
+# Install build tools for native modules (bcrypt, sharp)
+RUN apt-get update && apt-get install -y python3 make gcc g++ && rm -rf /var/lib/apt/lists/*
+
+# Copy monorepo manifests
+COPY package*.json turbo.json ./
+COPY packages/ ./packages/
+COPY apps/api/ ./apps/api/
+
+# Install dependencies and build
+RUN npm ci --include=dev
+RUN npm run db:generate --workspace=@repo/database
+RUN npm run build --workspace=@repo/types
+RUN npm run build --workspace=@repo/validators
+RUN npm run build --workspace=@repo/api
+
+# Production Runner
+FROM base AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV API_PORT=3001
+
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules/ ./node_modules/
+COPY --from=builder /app/packages/ ./packages/
+COPY --from=builder /app/apps/api/dist/ ./apps/api/dist/
+COPY --from=builder /app/apps/api/package*.json ./apps/api/
+
+EXPOSE 3001
+CMD ["node", "apps/api/dist/main.js"]
+

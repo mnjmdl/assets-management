@@ -5,17 +5,18 @@ import {
   View,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   ActivityIndicator,
   RefreshControl,
   Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { apiRequest } from '../services/api';
 import { storage } from '../services/storage';
 import { useAuth } from '../context/AuthContext';
 import { theme } from '../config/theme';
+import { saveCachedSessions, pruneOrphanedSessions } from '../database/db';
 
 interface AuditSessionItem {
   id: string;
@@ -62,6 +63,7 @@ export const AuditDetailScreen = () => {
 
   const planId = route.params?.planId || '';
   const initialPlanName = route.params?.planName || 'Audit Plan Details';
+  const isScanMode = Boolean(route.params?.isScanMode);
 
   const [plan, setPlan] = useState<AuditPlanDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -90,6 +92,10 @@ export const AuditDetailScreen = () => {
         });
         setPlan(data);
         await storage.setObject(cacheKey, data);
+        if (data?.sessions) {
+          saveCachedSessions(data.sessions).catch(() => {});
+          pruneOrphanedSessions(planId, data.sessions.map((s: any) => s.id)).catch(() => {});
+        }
       } else {
         const cached = await storage.getObject<AuditPlanDetail>(cacheKey);
         if (cached) {
@@ -108,7 +114,7 @@ export const AuditDetailScreen = () => {
     }
   };
 
-  const handleLaunchStationAudit = (session: AuditSessionItem) => {
+  const handleLaunchStationAudit = (session: AuditSessionItem, autoScan = false) => {
     // Navigate to Session Inventory Page (Session Checklist)
     navigation.navigate('SessionInventory', {
       sessionId: session.id,
@@ -123,15 +129,13 @@ export const AuditDetailScreen = () => {
             }
           : undefined,
       },
+      autoScan: autoScan || isScanMode,
     });
   };
 
   const handleStartNewStation = () => {
-    navigation.navigate('MainTabs', {
-      screen: 'Audits',
-      params: {
-        planId: plan?.id,
-      },
+    navigation.navigate('AuditStation', {
+      planId: plan?.id,
     });
   };
 
@@ -149,7 +153,7 @@ export const AuditDetailScreen = () => {
   const totalDiscrepancies = sessions.reduce((acc, s) => acc + (s._count?.discrepancies ?? 0), 0);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       {/* Top Navbar Header */}
       <View style={styles.topNavbar}>
         <TouchableOpacity
@@ -190,12 +194,13 @@ export const AuditDetailScreen = () => {
       </View>
 
       {isLoading ? (
-        <View style={styles.loadingContainer}>
+        <View style={[styles.loadingContainer, { backgroundColor: theme.colors.background }]}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
           <Text style={styles.loadingText}>Loading audit plan details...</Text>
         </View>
       ) : (
         <ScrollView
+          style={{ flex: 1, backgroundColor: theme.colors.background }}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
           refreshControl={
@@ -250,6 +255,22 @@ export const AuditDetailScreen = () => {
               </View>
             </View>
           </View>
+
+          {/* Step 2 Workflow Banner */}
+          {isScanMode && (
+            <View style={styles.workflowStepCard}>
+              <View style={styles.workflowStepHeader}>
+                <View style={[styles.workflowStepBadge, { backgroundColor: '#16a34a' }]}>
+                  <Ionicons name="location" size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                  <Text style={styles.workflowStepBadgeText}>STEP 2 OF 3</Text>
+                </View>
+              </View>
+              <Text style={styles.workflowStepTitle}>Select Station Session to Scan</Text>
+              <Text style={styles.workflowStepDesc}>
+                Tap any station session below to launch the camera scanner and start checking off items.
+              </Text>
+            </View>
+          )}
 
           {/* Sessions Section Header */}
           <View style={styles.sectionHeaderRow}>
@@ -389,8 +410,18 @@ export const AuditDetailScreen = () => {
                       )}
                     </View>
 
-                    <View style={styles.auditActionBtn}>
-                      <Text style={styles.auditActionBtnText}>View Inventory ➔</Text>
+                    <View style={styles.sessionActionRow}>
+                      <TouchableOpacity
+                        style={styles.startScanActionBtn}
+                        onPress={() => handleLaunchStationAudit(session, true)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="qr-code" size={13} color="#ffffff" style={{ marginRight: 4 }} />
+                        <Text style={styles.startScanActionBtnText}>Start Scan</Text>
+                      </TouchableOpacity>
+                      <View style={styles.auditActionBtn}>
+                        <Text style={styles.auditActionBtnText}>Checklist ➔</Text>
+                      </View>
                     </View>
                   </View>
                 </TouchableOpacity>
@@ -406,7 +437,7 @@ export const AuditDetailScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: '#ffffff',
   },
   topNavbar: {
     flexDirection: 'row',
@@ -720,13 +751,73 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: theme.colors.danger,
   },
+  sessionActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  startScanActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.success,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    ...theme.shadows.sm,
+  },
+  startScanActionBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
   auditActionBtn: {
-    paddingVertical: 2,
+    paddingVertical: 4,
+    paddingHorizontal: 6,
   },
   auditActionBtnText: {
     fontSize: 12,
     fontWeight: '700',
-    color: theme.colors.primary,
+    color: theme.colors.textMuted,
+  },
+  workflowStepCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: theme.borderRadius.lg,
+    padding: 14,
+    marginTop: 10,
+    marginBottom: 6,
+    borderWidth: 1.5,
+    borderColor: '#16a34a',
+    ...theme.shadows.card,
+  },
+  workflowStepHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  workflowStepBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#16a34a',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  workflowStepBadgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  workflowStepTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: theme.colors.textPrimary,
+    marginBottom: 3,
+  },
+  workflowStepDesc: {
+    fontSize: 12,
+    color: theme.colors.textSecondary,
+    lineHeight: 17,
   },
   emptyBox: {
     backgroundColor: '#ffffff',

@@ -5,18 +5,19 @@ import {
   View,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   ActivityIndicator,
   Alert,
   RefreshControl,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { ScannerView } from '../components/ScannerView';
 import {
   findCachedAsset,
+  findCachedLocation,
   getAllCachedLocations,
   CachedAsset,
   CachedLocation,
@@ -332,14 +333,23 @@ export const AuditScreen = () => {
   const handleScan = async (code: string) => {
     setStatusMessage(null);
     const cleanCode = code.trim();
+    const locCodeWithoutPrefix = cleanCode.replace(/^LOC:/i, '').trim();
 
     // ── Check if scanned code is a Station Placard ──────────────────────────────
-    const matchedLoc = locations.find(
+    let matchedLoc = locations.find(
       (loc) =>
         loc.code.toUpperCase() === cleanCode.toUpperCase() ||
+        loc.code.toUpperCase() === locCodeWithoutPrefix.toUpperCase() ||
+        `LOC:${loc.code.toUpperCase()}` === cleanCode.toUpperCase() ||
         loc.id === cleanCode ||
-        loc.name.toUpperCase() === cleanCode.toUpperCase(),
+        loc.id === locCodeWithoutPrefix ||
+        loc.name.toUpperCase() === cleanCode.toUpperCase() ||
+        loc.name.toUpperCase() === locCodeWithoutPrefix.toUpperCase(),
     );
+
+    if (!matchedLoc) {
+      matchedLoc = (await findCachedLocation(cleanCode)) || undefined;
+    }
 
     if (matchedLoc) {
       if (activeStation && activeStation.id === matchedLoc.id && scannedItems.length > 0) {
@@ -406,8 +416,16 @@ export const AuditScreen = () => {
       return;
     }
 
-    if (scannedItems.some((item) => item.assetCode === cleanCode || item.sapAssetCode === cleanCode)) {
-      setStatusMessage(`⚠️ Tag ${cleanCode} already in current station batch.`);
+    if (scannedItems.some((item) => item.assetCode?.toUpperCase() === cleanCode.toUpperCase() || item.sapAssetCode?.toUpperCase() === cleanCode.toUpperCase())) {
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      }
+      setStatusMessage(`⚠️ DUPLICATE: Tag "${cleanCode}" already in current station batch.`);
+      Alert.alert(
+        'Duplicate Asset Scanned',
+        `⚠️ Equipment tag "${cleanCode}" has ALREADY been scanned in this station batch.\n\nDuplicate scans are not allowed and will NOT be saved again.`,
+        [{ text: 'Dismiss', style: 'cancel' }],
+      );
       return;
     }
 
@@ -426,7 +444,37 @@ export const AuditScreen = () => {
       return;
     }
 
+    const currentSessionId = selectedSession?.id;
+    const currentPlanId = selectedPlan?.id || selectedSession?.planId;
     const isLocationMismatch = asset.locationId !== currentStation.id;
+
+    // Check duplicate in local SQLite DB if session is active
+    if (currentSessionId) {
+      const scanResult = await recordSessionItemScan(currentSessionId, cleanCode, {
+        status: isLocationMismatch ? 'LOCATION_MISMATCH' : 'VERIFIED',
+        condition: asset.condition || 'GOOD',
+        locationId: currentStation.id,
+        locationName: currentStation.name,
+        locationCode: currentStation.code,
+        planId: currentPlanId,
+        notes: isLocationMismatch
+          ? `Station audit mismatch at ${currentStation.name} (Assigned: ${asset.locationName || 'Unassigned'})`
+          : `Station audit verified at ${currentStation.name}`,
+      });
+
+      if (scanResult.isDuplicate) {
+        if (Platform.OS !== 'web') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+        }
+        setStatusMessage(`⚠️ DUPLICATE: Asset "${asset.assetCode}" already audited.`);
+        Alert.alert(
+          'Duplicate Asset Scanned',
+          scanResult.message || `⚠️ Asset "${asset.assetCode}" has already been audited in this session. Duplicate scan was not saved.`,
+          [{ text: 'Dismiss', style: 'cancel' }],
+        );
+        return;
+      }
+    }
 
     // Differentiated Tactile Pulse based on condition & relocation status
     if (Platform.OS !== 'web') {
@@ -449,24 +497,9 @@ export const AuditScreen = () => {
     setScannedItems((prev) => [newItem, ...prev]);
 
     // ── Immediate Real-Time Auto-Commit to Session Inventory ────────────────────
-    const currentSessionId = selectedSession?.id;
-    const currentPlanId = selectedPlan?.id || selectedSession?.planId;
     const auditStatus = isLocationMismatch ? 'LOCATION_MISMATCH' : 'FOUND';
 
-    // 1. Always record in Local SQLite Database immediately (offline-first)
-    if (currentSessionId) {
-      await recordSessionItemScan(currentSessionId, cleanCode, {
-        status: isLocationMismatch ? 'LOCATION_MISMATCH' : 'VERIFIED',
-        condition: newItem.selectedCondition,
-        locationId: currentStation.id,
-        locationName: currentStation.name,
-        locationCode: currentStation.code,
-        planId: currentPlanId,
-        notes: isLocationMismatch
-          ? `Station audit mismatch at ${currentStation.name} (Assigned: ${asset.locationName || 'Unassigned'})`
-          : `Station audit verified at ${currentStation.name}`,
-      });
-    } else {
+    if (!currentSessionId) {
       await recordOfflineAudit({
         id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         assetId: asset.id,
@@ -493,7 +526,7 @@ export const AuditScreen = () => {
             method: 'POST',
             body: JSON.stringify({
               assetId: asset.id,
-              status: 'VERIFIED',
+              status: isLocationMismatch ? 'MISMATCH' : 'VERIFIED',
               condition: newItem.selectedCondition,
               foundLocationId: currentStation.id,
               notes: isLocationMismatch
@@ -730,7 +763,7 @@ export const AuditScreen = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       {currentView === 'sessions' ? (
         /* ── All Current Audit Sessions Screen ────────────────────────────────── */
         <ScrollView
@@ -746,6 +779,18 @@ export const AuditScreen = () => {
         >
           {/* Top Navbar Header */}
           <View style={styles.sessionsHeader}>
+            {navigation.canGoBack() && (
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', marginRight: 8 }}
+                onPress={() => navigation.goBack()}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="arrow-back" size={20} color={theme.colors.primary} />
+                <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.primary, marginLeft: 3 }}>
+                  Plans
+                </Text>
+              </TouchableOpacity>
+            )}
             <View style={{ flex: 1, marginRight: 8 }}>
               <Text style={styles.title}>Audit Sessions</Text>
               <Text style={styles.subtitle} numberOfLines={1}>

@@ -59,8 +59,25 @@ export class TransfersService {
       throw new NotFoundException(`Asset with ID "${dto.assetId}" not found`);
     }
 
+    // Prevent duplicate active transfer requests for the same asset
+    const existingActiveTransfer = await this.prisma.assetTransfer.findFirst({
+      where: {
+        assetId: dto.assetId,
+        status: { in: [TransferStatus.PENDING, TransferStatus.APPROVED] },
+      },
+    });
+
+    if (existingActiveTransfer) {
+      throw new BadRequestException(
+        `A transfer request for asset "${asset.assetCode}" is already ${existingActiveTransfer.status.toLowerCase()} (#${existingActiveTransfer.id}). A new transfer request can only be submitted once the current one is finalized or rejected.`,
+      );
+    }
+
     // Resolve valid user ID
-    let validUserId = requestedById;
+    let validUserId =
+      typeof requestedById === 'object' && requestedById !== null
+        ? (requestedById as any).id
+        : requestedById;
     if (!validUserId || validUserId === 'admin') {
       const admin = await this.prisma.user.findFirst({ select: { id: true } });
       if (admin) validUserId = admin.id;
@@ -189,7 +206,10 @@ export class TransfersService {
       );
     }
 
-    let validUserId = approvedById;
+    let validUserId =
+      typeof approvedById === 'object' && approvedById !== null
+        ? (approvedById as any).id
+        : approvedById;
     if (!validUserId || validUserId === 'admin') {
       const admin = await this.prisma.user.findFirst({ select: { id: true } });
       if (admin) validUserId = admin.id;
@@ -222,7 +242,10 @@ export class TransfersService {
       );
     }
 
-    let validUserId = rejectedById;
+    let validUserId =
+      typeof rejectedById === 'object' && rejectedById !== null
+        ? (rejectedById as any).id
+        : rejectedById;
     if (!validUserId || validUserId === 'admin') {
       const admin = await this.prisma.user.findFirst({ select: { id: true } });
       if (admin) validUserId = admin.id;
@@ -290,6 +313,61 @@ export class TransfersService {
         data: assetUpdateData,
       }),
     ]);
+
+    // When transfer is finalized, automatically update session inventory checklist items
+    if (targetLocId) {
+      const targetLoc = await this.prisma.location.findUnique({
+        where: { id: targetLocId },
+        select: { id: true, name: true, code: true },
+      });
+
+      let validUserId =
+        typeof userId === 'object' && userId !== null
+          ? (userId as any).id
+          : userId;
+      if (!validUserId || validUserId === 'admin') {
+        const admin = await this.prisma.user.findFirst({ select: { id: true } });
+        if (admin) validUserId = admin.id;
+      }
+
+      // Find all audit items for this asset that were flagged as mismatch or scanned at target station
+      const affectedAuditItems = await this.prisma.auditItem.findMany({
+        where: {
+          assetId: transfer.assetId,
+          OR: [
+            { status: 'LOCATION_MISMATCH' },
+            { status: 'MISMATCH' },
+            { foundLocationId: targetLocId },
+          ],
+        },
+      });
+
+      for (const item of affectedAuditItems) {
+        await this.prisma.auditItem.update({
+          where: { id: item.id },
+          data: {
+            status: item.condition === 'DAMAGED' ? 'DAMAGED' : 'VERIFIED',
+            expectedLocationId: targetLocId,
+            notes: item.notes
+              ? `${item.notes} | Transferred to ${targetLoc?.name || targetLocId}`
+              : `Transferred to ${targetLoc?.name || targetLocId}`,
+          },
+        });
+
+        // Resolve any open discrepancy linked to this audit item
+        await this.prisma.auditDiscrepancy.updateMany({
+          where: {
+            auditItemId: item.id,
+            resolvedAt: null,
+          },
+          data: {
+            resolvedAt: new Date(),
+            resolvedById: validUserId || undefined,
+            resolutionNotes: `Location transfer completed: Relocated to ${targetLoc?.name || targetLocId}`,
+          },
+        });
+      }
+    }
 
     return updatedTransfer;
   }

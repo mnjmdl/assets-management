@@ -12,7 +12,7 @@ import * as ExcelJS from 'exceljs';
 
 @Injectable()
 export class AssetsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   // ── Asset Code Generator ────────────────────────────────────────────────────
   private async generateAssetCode(): Promise<string> {
@@ -41,6 +41,22 @@ export class AssetsService {
     });
   }
 
+  private async _resolveLocationAndDescendantIds(locationId: string): Promise<string[]> {
+    const allLocs = await this.prisma.location.findMany({ select: { id: true, parentId: true } });
+    const locIds = new Set<string>([locationId]);
+    let added = true;
+    while (added) {
+      added = false;
+      for (const loc of allLocs) {
+        if (loc.parentId && locIds.has(loc.parentId) && !locIds.has(loc.id)) {
+          locIds.add(loc.id);
+          added = true;
+        }
+      }
+    }
+    return Array.from(locIds);
+  }
+
   // ── Find All (with pagination & filters) ───────────────────────────────────
   async findAll(filter: AssetFilterDto) {
     const {
@@ -48,6 +64,10 @@ export class AssetsService {
       status, categoryId, locationId, departmentId, vendorId,
       warrantyExpiryBefore, purchaseDateFrom, purchaseDateTo, sapAssetCode,
     } = filter;
+
+    const matchedLocationIds = locationId
+      ? await this._resolveLocationAndDescendantIds(locationId)
+      : null;
 
     const where: Prisma.AssetWhereInput = {
       isActive: true,
@@ -63,7 +83,7 @@ export class AssetsService {
       }),
       ...(status && { status }),
       ...(categoryId && { categoryId }),
-      ...(locationId && { locationId }),
+      ...(matchedLocationIds && { locationId: { in: matchedLocationIds } }),
       ...(departmentId && { departmentId }),
       ...(vendorId && { vendorId }),
       ...(warrantyExpiryBefore && { warrantyExpiry: { lte: warrantyExpiryBefore } }),
@@ -109,6 +129,10 @@ export class AssetsService {
       warrantyExpiryBefore, purchaseDateFrom, purchaseDateTo, sapAssetCode,
     } = filter;
 
+    const matchedLocationIds = locationId
+      ? await this._resolveLocationAndDescendantIds(locationId)
+      : null;
+
     const where: Prisma.AssetWhereInput = {
       isActive: true,
       ...(sapAssetCode && { sapAssetCode }),
@@ -123,7 +147,7 @@ export class AssetsService {
       }),
       ...(status && { status }),
       ...(categoryId && { categoryId }),
-      ...(locationId && { locationId }),
+      ...(matchedLocationIds && { locationId: { in: matchedLocationIds } }),
       ...(departmentId && { departmentId }),
       ...(vendorId && { vendorId }),
       ...(warrantyExpiryBefore && { warrantyExpiry: { lte: warrantyExpiryBefore } }),
@@ -714,8 +738,8 @@ export class AssetsService {
       const categoryName = rawCatName
         ? String(rawCatName).trim()
         : assetClass
-        ? `Class ${assetClass}`
-        : 'General Assets';
+          ? `Class ${assetClass}`
+          : 'General Assets';
       const catCode = assetClass
         ? `CAT-${assetClass}`
         : `CAT-${categoryName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
@@ -972,8 +996,8 @@ export class AssetsService {
       const categoryName = rawCatName
         ? String(rawCatName).trim()
         : assetClass
-        ? `Class ${assetClass}`
-        : 'General Assets';
+          ? `Class ${assetClass}`
+          : 'General Assets';
       const catCode = assetClass
         ? `CAT-${assetClass}`
         : `CAT-${categoryName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
@@ -1095,8 +1119,8 @@ export class AssetsService {
       const categoryName = rawCatName
         ? String(rawCatName).trim()
         : assetClass
-        ? `Class ${assetClass}`
-        : 'General Assets';
+          ? `Class ${assetClass}`
+          : 'General Assets';
       const catCode = assetClass
         ? `CAT-${assetClass}`
         : `CAT-${categoryName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;

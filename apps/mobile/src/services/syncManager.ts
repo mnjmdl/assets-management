@@ -16,10 +16,19 @@ import {
   getLocationCount,
   markSessionItemSynced,
   saveCachedSessions,
+  saveCachedSessionItems,
 } from '../database/db';
 
 export interface SyncProgress {
-  phase: 'idle' | 'fetching_assets' | 'inserting_assets' | 'fetching_locations' | 'inserting_locations' | 'completed' | 'error';
+  phase:
+    | 'idle'
+    | 'fetching_assets'
+    | 'inserting_assets'
+    | 'fetching_locations'
+    | 'inserting_locations'
+    | 'fetching_sessions'
+    | 'completed'
+    | 'error';
   current: number;
   total: number;
   message: string;
@@ -32,6 +41,7 @@ const BATCH_SIZE = 500;
 export async function runFullSync(onProgress?: ProgressCallback): Promise<{
   assetCount: number;
   locationCount: number;
+  sessionCount: number;
   syncedAt: string;
 }> {
   const notify = (progress: SyncProgress) => {
@@ -174,14 +184,49 @@ export async function runFullSync(onProgress?: ProgressCallback): Promise<{
       }
     }
 
-    // ── 4. Preload audit sessions into local SQLite ────────────────────────────
+    // ── 4. Preload and refresh audit sessions & checklists in local SQLite ────
+    let sessionCount = 0;
     try {
-      const sessRes = await apiRequest<{ data: any[] } | any[]>('/audits/sessions?limit=100', {
-        timeoutMs: 10000,
+      notify({
+        phase: 'fetching_sessions',
+        current: 0,
+        total: 0,
+        message: 'Syncing audit sessions & checklists...',
+      });
+
+      const sessRes = await apiRequest<{ data: any[] } | any[]>('/audits/sessions?limit=200', {
+        timeoutMs: 15000,
       });
       const sessList = Array.isArray(sessRes) ? sessRes : sessRes?.data || [];
       if (sessList.length > 0) {
+        sessionCount = sessList.length;
         await saveCachedSessions(sessList);
+
+        // Fetch and refresh checklist items for active sessions
+        const activeSessions = sessList.filter(
+          (s: any) => s.status === 'IN_PROGRESS' || s.status === 'NOT_STARTED',
+        );
+
+        for (const s of activeSessions) {
+          try {
+            const itemsRes = await apiRequest<any[] | { data: any[] }>(
+              `/audits/sessions/${s.id}/items`,
+              { timeoutMs: 8000 },
+            );
+            const sItems = Array.isArray(itemsRes) ? itemsRes : itemsRes?.data || [];
+            if (sItems.length > 0) {
+              await saveCachedSessionItems(s.id, sItems);
+            }
+          } catch (itemErr) {
+            console.warn(`[SyncManager] Could not preload items for session ${s.id}:`, itemErr);
+          }
+        }
+
+        // Clean up any stale synced items whose sessions no longer exist
+        await db.runAsync(
+          `DELETE FROM session_audit_items 
+           WHERE sessionId NOT IN (SELECT id FROM audit_sessions) AND synced = 1;`,
+        );
       }
     } catch (sessErr) {
       console.warn('[SyncManager] Failed to cache sessions during sync, continuing:', sessErr);
@@ -193,17 +238,22 @@ export async function runFullSync(onProgress?: ProgressCallback): Promise<{
     // ── 6. Save metadata ────────────────────────────────────────────────────────
     await setSyncMeta('LAST_SYNC_TIME', nowIso);
     await setSyncMeta('LAST_SYNC_ASSET_COUNT', totalAssets.toString());
+    await setSyncMeta('LAST_SYNC_LOCATION_COUNT', locations.length.toString());
+    await setSyncMeta('LAST_SYNC_SESSION_COUNT', sessionCount.toString());
+
+    notifyOutboxChanged();
 
     notify({
       phase: 'completed',
       current: totalAssets,
       total: totalAssets,
-      message: `Sync complete! ${totalAssets.toLocaleString()} assets ready for offline scan.`,
+      message: `Sync complete! All tables refreshed (${totalAssets.toLocaleString()} assets, ${locations.length} locations, ${sessionCount} sessions).`,
     });
 
     return {
       assetCount: totalAssets,
       locationCount: locations.length,
+      sessionCount,
       syncedAt: nowIso,
     };
   } catch (error: any) {

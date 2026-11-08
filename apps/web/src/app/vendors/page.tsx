@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import Link from 'next/link';
 import {
   Truck,
@@ -76,18 +77,30 @@ const PRESET_SERVICE_TYPES = [
 ];
 
 export default function VendorsPage() {
-  const [vendors, setVendors] = useState<VendorItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data: rawStats, mutate: mutateStats } = useSWR('/api/vendors/stats');
+  const {
+    data: rawVendors,
+    error: vendorsError,
+    isLoading: vendorsLoading,
+    mutate: mutateVendors,
+  } = useSWR('/api/vendors?limit=100');
 
-  // Stats
-  const [stats, setStats] = useState<VendorStats>({
+  const stats: VendorStats = rawStats?.data || rawStats || {
     total: 0,
     active: 0,
     inactive: 0,
     totalAssetsSupplied: 0,
     totalServiceOrders: 0,
-  });
+  };
+
+  const vendors: VendorItem[] = Array.isArray(rawVendors?.data)
+    ? rawVendors.data
+    : Array.isArray(rawVendors)
+    ? rawVendors
+    : [];
+
+  const loading = vendorsLoading && vendors.length === 0;
+  const error = vendorsError ? vendorsError.message || 'Could not load vendors' : null;
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -114,35 +127,8 @@ export default function VendorsPage() {
   });
 
   const fetchData = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [statsRes, vendorsRes] = await Promise.all([
-        fetch('/api/vendors/stats'),
-        fetch('/api/vendors?limit=100'),
-      ]);
-
-      if (statsRes.ok) {
-        const sJson = await statsRes.json();
-        setStats(sJson?.data || sJson || {});
-      }
-
-      if (vendorsRes.ok) {
-        const vJson = await vendorsRes.json();
-        const vList = Array.isArray(vJson?.data) ? vJson.data : Array.isArray(vJson) ? vJson : [];
-        setVendors(vList);
-      }
-    } catch (err: any) {
-      console.error('Error fetching vendors:', err);
-      setError(err.message || 'Could not load vendors');
-    } finally {
-      setLoading(false);
-    }
+    await Promise.all([mutateStats(), mutateVendors()]);
   };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
 
   const openCreateModal = () => {
     setEditingVendor(null);

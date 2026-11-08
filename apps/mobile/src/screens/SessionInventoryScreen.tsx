@@ -5,7 +5,6 @@ import {
   View,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   ActivityIndicator,
   TextInput,
   RefreshControl,
@@ -14,6 +13,7 @@ import {
   Modal,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -36,6 +36,10 @@ import {
   getSessionAuditItems,
   recordSessionItemScan,
   findCachedAsset,
+  findCachedLocation,
+  updateLocalItemAfterTransferFinalized,
+  updateLocalItemStatus,
+  markLocalSessionUnscannedAsMissing,
 } from '../database/db';
 
 const beepSound = require('../../assets/beep.wav');
@@ -103,13 +107,92 @@ export const SessionInventoryScreen = () => {
   const [outboxCount, setOutboxCount] = useState<number>(0);
   const [isSyncingOutbox, setIsSyncingOutbox] = useState<boolean>(false);
 
+  // Transfer request state
+  const [transferModalItem, setTransferModalItem] = useState<SessionAuditItem | null>(null);
+  const [transferReason, setTransferReason] = useState<string>('');
+  const [isSubmittingTransfer, setIsSubmittingTransfer] = useState<boolean>(false);
+  const [pendingTransferAssetIds, setPendingTransferAssetIds] = useState<Set<string>>(new Set());
+  const [completedTransferAssetIds, setCompletedTransferAssetIds] = useState<Set<string>>(new Set());
+
   // Camera Scanning State
   const [permission, requestPermission] = useCameraPermissions();
   const [isScanningOpen, setIsScanningOpen] = useState(false);
   const [enableTorch, setEnableTorch] = useState(false);
-  const [scanToast, setScanToast] = useState<string | null>(null);
+  const [scanToast, setScanToast] = useState<{
+    message: string;
+    type: 'success' | 'warning' | 'error';
+  } | null>(null);
   const lastScannedTimeRef = useRef<number>(0);
   const audioPlayer = useAudioPlayer(beepSound);
+
+  const fetchPendingTransfers = useCallback(async () => {
+    if (isOfflineMode) return;
+    try {
+      const res = await apiRequest<any>('/transfers?limit=200', {
+        timeoutMs: 6000,
+      });
+      const list = Array.isArray(res) ? res : res?.data || [];
+      const pendingIds = new Set<string>();
+      const finalizedIds = new Set<string>();
+
+      list.forEach((t: any) => {
+        const aId = t.assetId || t.asset?.id;
+        if (!aId) return;
+        if (t.status === 'PENDING' || t.status === 'APPROVED') {
+          pendingIds.add(aId);
+        } else if (t.status === 'COMPLETED') {
+          finalizedIds.add(aId);
+        }
+      });
+
+      if (pendingIds.size > 0) {
+        setPendingTransferAssetIds((prev) => {
+          const merged = new Set(prev);
+          pendingIds.forEach((id) => merged.add(id));
+          return merged;
+        });
+      }
+
+      if (finalizedIds.size > 0) {
+        setCompletedTransferAssetIds((prev) => {
+          const merged = new Set(prev);
+          finalizedIds.forEach((id) => merged.add(id));
+          return merged;
+        });
+
+        // When transfer is finalized, automatically update status in Session Inventory Checklist
+        let hasChanges = false;
+        setItems((currentItems) => {
+          return currentItems.map((item) => {
+            if (
+              finalizedIds.has(item.assetId) &&
+              (item.status === 'LOCATION_MISMATCH' || item.status === 'MISMATCH')
+            ) {
+              hasChanges = true;
+              return {
+                ...item,
+                status: item.condition === 'DAMAGED' ? 'DAMAGED' : 'VERIFIED',
+                expectedLocation: item.foundLocation || item.expectedLocation,
+                notes: item.notes
+                  ? `${item.notes} | Transfer finalized`
+                  : 'Transfer finalized',
+                discrepancy: null,
+              };
+            }
+            return item;
+          });
+        });
+
+        if (hasChanges) {
+          for (const aId of finalizedIds) {
+            updateLocalItemAfterTransferFinalized(sessionId, aId).catch(() => {});
+          }
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+  }, [isOfflineMode, sessionId]);
 
   const refreshOutboxStatus = useCallback(async () => {
     try {
@@ -123,7 +206,8 @@ export const SessionInventoryScreen = () => {
     useCallback(() => {
       loadSessionAndItems();
       refreshOutboxStatus();
-    }, [sessionId, refreshOutboxStatus])
+      fetchPendingTransfers();
+    }, [sessionId, refreshOutboxStatus, fetchPendingTransfers])
   );
 
   useEffect(() => {
@@ -273,6 +357,16 @@ export const SessionInventoryScreen = () => {
     setEnableTorch(false);
   };
 
+  // Auto-launch camera scanner if autoScan param was passed (from Step 2 Session Selection)
+  useEffect(() => {
+    if (route.params?.autoScan) {
+      const timer = setTimeout(() => {
+        handleOpenScanner();
+      }, 200);
+      return () => clearTimeout(timer);
+    }
+  }, [route.params?.autoScan]);
+
   const handleBarcodeScanned = async (scanningResult: { data: string }) => {
     const now = Date.now();
     // Debounce duplicate reads within 1.5s
@@ -282,11 +376,46 @@ export const SessionInventoryScreen = () => {
     const cleanCode = scanningResult.data?.trim();
     if (!cleanCode) return;
 
-    // Audio confirmation
-    try {
-      audioPlayer.seekTo(0);
-      audioPlayer.play();
-    } catch {}
+    // Check if scanned code is a Location QR Placard rather than an Asset Tag
+    const loc = await findCachedLocation(cleanCode);
+    if (loc) {
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      }
+      Alert.alert(
+        'Station Placard Scanned',
+        `"${loc.name}" (${loc.code}) is a Location QR Placard, not an equipment asset tag.\n\nPlease scan the barcode or QR tag affixed to the equipment item.`,
+      );
+      return;
+    }
+
+    // Check in-memory list first for instant duplicate feedback
+    const inMemoryScanned = items.find(
+      (i) =>
+        (i.asset.assetCode?.toUpperCase() === cleanCode.toUpperCase() ||
+          i.asset.sapAssetCode?.toUpperCase() === cleanCode.toUpperCase() ||
+          i.asset.qrCode?.toUpperCase() === cleanCode.toUpperCase() ||
+          i.asset.id === cleanCode) &&
+        i.status !== 'PENDING' &&
+        Boolean(i.scannedAt),
+    );
+
+    if (inMemoryScanned) {
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      }
+      setScanToast({
+        type: 'error',
+        message: `DUPLICATE: ${inMemoryScanned.asset.assetCode} ALREADY SCANNED`,
+      });
+      setTimeout(() => setScanToast(null), 4000);
+      Alert.alert(
+        'Duplicate Asset Scanned',
+        `⚠️ Equipment "${inMemoryScanned.asset.assetCode}" (${inMemoryScanned.asset.name}) has ALREADY been audited in this session.\n\nDuplicate scans are NOT allowed and this record was NOT saved.`,
+        [{ text: 'Dismiss', style: 'cancel' }],
+      );
+      return;
+    }
 
     const result = await recordSessionItemScan(sessionId, cleanCode, {
       locationId: session?.locationId || undefined,
@@ -295,7 +424,30 @@ export const SessionInventoryScreen = () => {
       planId: session?.planId,
     });
 
+    if (result.isDuplicate) {
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      }
+      setScanToast({
+        type: 'error',
+        message: `DUPLICATE: ${result.item?.assetCode || cleanCode} ALREADY SCANNED`,
+      });
+      setTimeout(() => setScanToast(null), 4000);
+      Alert.alert(
+        'Duplicate Asset Scanned',
+        result.message || `⚠️ Equipment "${cleanCode}" has already been audited. Duplicate scans are rejected and NOT saved.`,
+        [{ text: 'Dismiss', style: 'cancel' }],
+      );
+      return;
+    }
+
     if (result.success) {
+      // Audio confirmation on successful scan
+      try {
+        audioPlayer.seekTo(0);
+        audioPlayer.play();
+      } catch {}
+
       // Differentiated Haptic Feedback based on condition & relocation status
       if (Platform.OS !== 'web') {
         if (result.item?.condition === 'DAMAGED' || result.item?.status === 'DAMAGED') {
@@ -311,7 +463,10 @@ export const SessionInventoryScreen = () => {
       const updatedList = await getSessionAuditItems(sessionId);
       setItems(updatedList);
       refreshOutboxStatus();
-      setScanToast(result.message);
+      setScanToast({
+        type: result.item?.isMismatch ? 'warning' : 'success',
+        message: result.message,
+      });
       setTimeout(() => setScanToast(null), 3500);
 
       // Trigger live sync in background if online
@@ -331,27 +486,125 @@ export const SessionInventoryScreen = () => {
   const handleToggleCompleteSession = async () => {
     if (!session || isOfflineMode) return;
     const isCompleted = session.status === 'COMPLETED';
-    const action = isCompleted ? 'reopen' : 'complete';
 
+    if (isCompleted) {
+      // Reopen session
+      setIsStatusUpdating(true);
+      try {
+        await apiRequest(`/audits/sessions/${session.id}/reopen`, {
+          method: 'PUT',
+          timeoutMs: 8000,
+        });
+
+        setSession((prev) => (prev ? { ...prev, status: 'IN_PROGRESS' } : null));
+        Alert.alert('Session Reopened', 'Session reopened for further scanning.');
+      } catch (err: any) {
+        Alert.alert('Action Failed', err?.message || 'Could not reopen session.');
+      } finally {
+        setIsStatusUpdating(false);
+      }
+      return;
+    }
+
+    // Completing session
+    const pendingCount = items.filter((i) => i.status === 'PENDING').length;
+
+    if (pendingCount > 0) {
+      Alert.alert(
+        'Session Completion Notice',
+        `There are ${pendingCount} expected assets that were NOT scanned in this station session.\n\nHow would you like to proceed?`,
+        [
+          { text: 'Cancel & Keep Scanning', style: 'cancel' },
+          {
+            text: `Mark ${pendingCount} as MISSING`,
+            style: 'destructive',
+            onPress: () => submitSessionCompletion(true),
+          },
+          {
+            text: 'Leave as PENDING',
+            onPress: () => submitSessionCompletion(false),
+          },
+        ],
+      );
+    } else {
+      Alert.alert(
+        'Complete Session',
+        'All expected equipment items have been audited. Mark this session as COMPLETED now?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Complete Now',
+            onPress: () => submitSessionCompletion(false),
+          },
+        ],
+      );
+    }
+  };
+
+  const submitSessionCompletion = async (markUnscannedAsMissing: boolean) => {
+    if (!session) return;
     setIsStatusUpdating(true);
     try {
-      await apiRequest(`/audits/sessions/${session.id}/${action}`, {
+      await apiRequest(`/audits/sessions/${session.id}/complete`, {
         method: 'PUT',
-        timeoutMs: 8000,
+        body: JSON.stringify({ markUnscannedAsMissing }),
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: 10000,
       });
 
-      setSession((prev) => (prev ? { ...prev, status: isCompleted ? 'IN_PROGRESS' : 'COMPLETED' } : null));
+      if (markUnscannedAsMissing) {
+        setItems((prev) =>
+          prev.map((i) => (i.status === 'PENDING' ? { ...i, status: 'MISSING' } : i)),
+        );
+        await markLocalSessionUnscannedAsMissing(session.id);
+      }
+
+      setSession((prev) => (prev ? { ...prev, status: 'COMPLETED' } : null));
       Alert.alert(
-        'Session Updated',
-        isCompleted
-          ? 'Session reopened for further scanning.'
-          : 'Session marked as COMPLETED successfully.',
+        'Session Completed',
+        markUnscannedAsMissing
+          ? `Session marked as COMPLETED and unscanned items were marked as MISSING.`
+          : `Session marked as COMPLETED. Unscanned items remain PENDING for admin review.`,
       );
     } catch (err: any) {
-      Alert.alert('Action Failed', err?.message || 'Could not update session status.');
+      Alert.alert('Action Failed', err?.message || 'Could not complete session.');
     } finally {
       setIsStatusUpdating(false);
     }
+  };
+
+  const handleMarkSingleItemMissing = (item: SessionAuditItem) => {
+    if (!session) return;
+    Alert.alert(
+      'Mark Asset as Missing',
+      `Are you sure you want to mark equipment "${item.asset.assetCode}" (${item.asset.name}) as MISSING for this station audit?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mark Missing',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              if (!isOfflineMode) {
+                await apiRequest(`/audits/sessions/${session.id}/items/${item.id}/mark-missing`, {
+                  method: 'PUT',
+                  body: JSON.stringify({ notes: 'Manually flagged as MISSING by auditor' }),
+                  headers: { 'Content-Type': 'application/json' },
+                });
+              }
+
+              setItems((prev) =>
+                prev.map((i) => (i.id === item.id ? { ...i, status: 'MISSING' } : i)),
+              );
+              await updateLocalItemStatus(session.id, item.id, 'MISSING');
+              Alert.alert('Status Updated', `Asset "${item.asset.assetCode}" has been marked as MISSING.`);
+            } catch (err: any) {
+              Alert.alert('Action Failed', err?.message || 'Could not mark item as missing.');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleNavigateToStationScanner = () => {
@@ -375,6 +628,99 @@ export const SessionInventoryScreen = () => {
     });
   };
 
+  const handleOpenTransferModal = (item: SessionAuditItem) => {
+    if (pendingTransferAssetIds.has(item.assetId)) {
+      Alert.alert(
+        'Transfer Already Requested',
+        `A transfer request for asset "${item.asset.assetCode}" has already been submitted and is currently pending manager approval. Multiple requests are not permitted.`,
+      );
+      return;
+    }
+
+    if (completedTransferAssetIds.has(item.assetId) || item.discrepancy?.resolvedAt) {
+      Alert.alert(
+        'Transfer Already Finalized',
+        `The location transfer for asset "${item.asset.assetCode}" has already been approved and finalized.`,
+      );
+      return;
+    }
+
+    const fromName = item.expectedLocation?.name || 'Unassigned';
+    const toName = item.foundLocation?.name || session?.location?.name || 'Current Station';
+    setTransferModalItem(item);
+    setTransferReason(
+      `Audited location discrepancy: Item found at ${toName} (Assigned to ${fromName}). Requesting station relocation transfer.`,
+    );
+  };
+
+  const handleSubmitTransfer = async () => {
+    if (!transferModalItem) return;
+
+    if (pendingTransferAssetIds.has(transferModalItem.assetId)) {
+      Alert.alert(
+        'Transfer Already Submitted',
+        `A transfer request for "${transferModalItem.asset.assetCode}" has already been submitted and is currently pending approval.`,
+      );
+      setTransferModalItem(null);
+      return;
+    }
+
+    if (isOfflineMode) {
+      Alert.alert(
+        'Offline Mode Active',
+        'Submitting a transfer request requires an online connection to notify inventory managers. Please reconnect to the network and try again.',
+      );
+      return;
+    }
+
+    const targetLocationId =
+      transferModalItem.foundLocation?.id || session?.locationId;
+
+    if (!targetLocationId) {
+      Alert.alert(
+        'Missing Destination',
+        'Could not determine destination location ID for transfer. Please ensure the target station has a valid location code.',
+      );
+      return;
+    }
+
+    setIsSubmittingTransfer(true);
+    try {
+      await apiRequest('/transfers', {
+        method: 'POST',
+        body: JSON.stringify({
+          assetId: transferModalItem.assetId,
+          toLocationId: targetLocationId,
+          reason: transferReason.trim() || undefined,
+        }),
+      });
+
+      // Submit once: lock it in local state immediately so it can never be submitted again
+      setPendingTransferAssetIds((prev) => new Set(prev).add(transferModalItem.assetId));
+
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      }
+
+      const assetCode = transferModalItem.asset.assetCode;
+      const toName =
+        transferModalItem.foundLocation?.name || session?.location?.name || 'Current Station';
+
+      setTransferModalItem(null);
+      Alert.alert(
+        'Transfer Requested',
+        `Transfer request for ${assetCode} to "${toName}" has been submitted successfully and is now pending approval.`,
+      );
+    } catch (err: any) {
+      if (err?.message && (err.message.toLowerCase().includes('already') || err.message.toLowerCase().includes('pending'))) {
+        setPendingTransferAssetIds((prev) => new Set(prev).add(transferModalItem.assetId));
+      }
+      Alert.alert('Transfer Request Notice', err?.message || 'Could not submit transfer request.');
+    } finally {
+      setIsSubmittingTransfer(false);
+    }
+  };
+
   // Filtered items
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
@@ -382,6 +728,16 @@ export const SessionInventoryScreen = () => {
         const itemStatus = item.status?.toUpperCase();
         if (statusFilter === 'VERIFIED') {
           if (itemStatus !== 'VERIFIED' && itemStatus !== 'FOUND') return false;
+        } else if (statusFilter === 'MISMATCH') {
+          const isLocMismatch =
+            itemStatus === 'MISMATCH' ||
+            itemStatus === 'LOCATION_MISMATCH' ||
+            Boolean(
+              item.foundLocation &&
+                item.expectedLocation &&
+                item.foundLocation.id !== item.expectedLocation.id,
+            );
+          if (!isLocMismatch) return false;
         } else if (itemStatus !== statusFilter) {
           return false;
         }
@@ -406,7 +762,14 @@ export const SessionInventoryScreen = () => {
   const verifiedCount = items.filter((i) => i.status === 'VERIFIED' || i.status === 'FOUND').length;
   const pendingCount = items.filter((i) => i.status === 'PENDING').length;
   const mismatchCount = items.filter(
-    (i) => i.status === 'MISMATCH' || (i.expectedLocation && i.foundLocation && i.foundLocation.id !== i.expectedLocation.id),
+    (i) =>
+      i.status === 'MISMATCH' ||
+      i.status === 'LOCATION_MISMATCH' ||
+      Boolean(
+        i.expectedLocation &&
+          i.foundLocation &&
+          i.foundLocation.id !== i.expectedLocation.id,
+      ),
   ).length;
   const damagedCount = items.filter((i) => i.status === 'DAMAGED' || i.condition === 'DAMAGED').length;
   const completionPercent = totalCount > 0 ? Math.round((verifiedCount / totalCount) * 100) : 0;
@@ -431,6 +794,7 @@ export const SessionInventoryScreen = () => {
         border = '#e2e8f0';
         break;
       case 'MISMATCH':
+      case 'LOCATION_MISMATCH':
         bg = theme.colors.warningLight;
         text = theme.colors.warning;
         border = theme.colors.warningBorder;
@@ -442,18 +806,30 @@ export const SessionInventoryScreen = () => {
         break;
     }
 
+    const displayLabel = status === 'LOCATION_MISMATCH' ? 'MISMATCH' : status;
+
     return (
       <View style={[styles.itemStatusBadge, { backgroundColor: bg, borderColor: border }]}>
-        <Text style={[styles.itemStatusText, { color: text }]}>{status}</Text>
+        <Text style={[styles.itemStatusText, { color: text }]}>{displayLabel}</Text>
       </View>
     );
   };
 
   const renderInventoryItem = ({ item }: { item: SessionAuditItem }) => {
     const isRelocated =
-      item.foundLocation &&
-      item.expectedLocation &&
-      item.foundLocation.id !== item.expectedLocation.id;
+      Boolean(
+        item.foundLocation &&
+          item.expectedLocation &&
+          item.foundLocation.id !== item.expectedLocation.id,
+      ) ||
+      item.status === 'MISMATCH' ||
+      item.status === 'LOCATION_MISMATCH';
+
+    const isTransferFinalized =
+      completedTransferAssetIds.has(item.assetId) ||
+      Boolean(item.discrepancy?.resolvedAt);
+
+    const isTransferPending = pendingTransferAssetIds.has(item.assetId);
 
     return (
       <TouchableOpacity
@@ -528,11 +904,45 @@ export const SessionInventoryScreen = () => {
         </View>
 
         {isRelocated && (
-          <View style={styles.relocatedBanner}>
-            <Ionicons name="warning-outline" size={13} color={theme.colors.warning} />
-            <Text style={styles.relocatedBannerText}>
-              Relocated: Scanned at {item.foundLocation?.name}
-            </Text>
+          <View style={[styles.relocatedBanner, isTransferFinalized && styles.relocatedBannerFinalized]}>
+            <View style={styles.relocatedBannerLeft}>
+              <Ionicons
+                name={isTransferFinalized ? 'checkmark-circle' : 'warning-outline'}
+                size={14}
+                color={isTransferFinalized ? '#16a34a' : '#d97706'}
+              />
+              <Text
+                style={[
+                  styles.relocatedBannerText,
+                  isTransferFinalized && styles.relocatedBannerTextFinalized,
+                ]}
+                numberOfLines={2}
+              >
+                {isTransferFinalized
+                  ? `Transferred: Moved to ${item.foundLocation?.name || session?.location?.name || 'this station'}`
+                  : `Relocated: Scanned at ${item.foundLocation?.name || session?.location?.name || 'different station'}`}
+              </Text>
+            </View>
+            {isTransferFinalized ? (
+              <View style={styles.transferCompletedBadge}>
+                <Ionicons name="checkmark-circle" size={11} color="#15803d" style={{ marginRight: 3 }} />
+                <Text style={styles.transferCompletedBadgeText}>Finalized</Text>
+              </View>
+            ) : isTransferPending ? (
+              <View style={styles.transferPendingBadge}>
+                <Ionicons name="time-outline" size={11} color="#b45309" style={{ marginRight: 3 }} />
+                <Text style={styles.transferPendingBadgeText}>Transfer Pending</Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={styles.transferBtn}
+                onPress={() => handleOpenTransferModal(item)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="swap-horizontal" size={12} color="#ffffff" style={{ marginRight: 4 }} />
+                <Text style={styles.transferBtnText}>Transfer</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -549,6 +959,17 @@ export const SessionInventoryScreen = () => {
                 <Text style={styles.conditionText}>Condition: {item.condition}</Text>
               </View>
             )}
+
+            {item.status === 'PENDING' && (
+              <TouchableOpacity
+                style={styles.markMissingRowBtn}
+                onPress={() => handleMarkSingleItemMissing(item)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="alert-circle-outline" size={12} color="#dc2626" style={{ marginRight: 3 }} />
+                <Text style={styles.markMissingRowBtnText}>Mark Missing</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <Text style={styles.scannedTimeText}>
@@ -562,7 +983,7 @@ export const SessionInventoryScreen = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       {/* Top Navbar Header */}
       <View style={styles.topNavbar}>
         <TouchableOpacity
@@ -664,22 +1085,52 @@ export const SessionInventoryScreen = () => {
 
       {/* Floating Scan Toast Banner */}
       {scanToast && (
-        <View style={styles.floatingToast}>
-          <Ionicons name="checkmark-circle" size={16} color="#166534" />
-          <Text style={styles.floatingToastText} numberOfLines={2}>
-            {scanToast}
+        <View
+          style={[
+            styles.floatingToast,
+            scanToast.type === 'error' && styles.floatingToastError,
+            scanToast.type === 'warning' && styles.floatingToastWarning,
+          ]}
+        >
+          <Ionicons
+            name={
+              scanToast.type === 'error'
+                ? 'close-circle'
+                : scanToast.type === 'warning'
+                ? 'alert-circle'
+                : 'checkmark-circle'
+            }
+            size={16}
+            color={
+              scanToast.type === 'error'
+                ? '#dc2626'
+                : scanToast.type === 'warning'
+                ? '#d97706'
+                : '#166534'
+            }
+          />
+          <Text
+            style={[
+              styles.floatingToastText,
+              scanToast.type === 'error' && styles.floatingToastTextError,
+              scanToast.type === 'warning' && styles.floatingToastTextWarning,
+            ]}
+            numberOfLines={2}
+          >
+            {scanToast.message}
           </Text>
         </View>
       )}
 
       {/* Main Content Area */}
       {isLoading ? (
-        <View style={styles.loadingContainer}>
+        <View style={[styles.loadingContainer, { backgroundColor: theme.colors.background }]}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
           <Text style={styles.loadingText}>Loading session inventory checklist...</Text>
         </View>
       ) : (
         <FlatList
+          style={{ flex: 1, backgroundColor: theme.colors.background }}
           data={filteredItems}
           keyExtractor={(item) => item.id}
           renderItem={renderInventoryItem}
@@ -994,9 +1445,39 @@ export const SessionInventoryScreen = () => {
 
               <View style={styles.viewfinderWrapper}>
                 {scanToast && (
-                  <View style={styles.scannerFeedbackPill}>
-                    <Ionicons name="checkmark-circle" size={16} color="#4ade80" />
-                    <Text style={styles.scannerFeedbackText}>{scanToast}</Text>
+                  <View
+                    style={[
+                      styles.scannerFeedbackPill,
+                      scanToast.type === 'error' && styles.scannerFeedbackPillError,
+                      scanToast.type === 'warning' && styles.scannerFeedbackPillWarning,
+                    ]}
+                  >
+                    <Ionicons
+                      name={
+                        scanToast.type === 'error'
+                          ? 'close-circle'
+                          : scanToast.type === 'warning'
+                          ? 'alert-circle'
+                          : 'checkmark-circle'
+                      }
+                      size={16}
+                      color={
+                        scanToast.type === 'error'
+                          ? '#f87171'
+                          : scanToast.type === 'warning'
+                          ? '#facc15'
+                          : '#4ade80'
+                      }
+                    />
+                    <Text
+                      style={[
+                        styles.scannerFeedbackText,
+                        scanToast.type === 'error' && styles.scannerFeedbackTextError,
+                        scanToast.type === 'warning' && styles.scannerFeedbackTextWarning,
+                      ]}
+                    >
+                      {scanToast.message}
+                    </Text>
                   </View>
                 )}
                 <View style={styles.viewfinderBox}>
@@ -1024,6 +1505,122 @@ export const SessionInventoryScreen = () => {
           </CameraView>
         </SafeAreaView>
       </Modal>
+
+      {/* Transfer Request Modal */}
+      <Modal
+        visible={Boolean(transferModalItem)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isSubmittingTransfer) setTransferModalItem(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContentCard}>
+            <View style={styles.modalHeaderRow}>
+              <View style={styles.modalHeaderLeft}>
+                <View style={styles.modalHeaderIconBadge}>
+                  <Ionicons name="swap-horizontal" size={20} color={theme.colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modalTitle}>Request Asset Transfer</Text>
+                  <Text style={styles.modalSubtitle}>Relocate to current scanned station</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                disabled={isSubmittingTransfer}
+                onPress={() => setTransferModalItem(null)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="close" size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            {transferModalItem && (
+              <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+                {/* Asset preview */}
+                <View style={styles.transferAssetSummary}>
+                  <Text style={styles.transferAssetCode}>{transferModalItem.asset.assetCode}</Text>
+                  <Text style={styles.transferAssetName} numberOfLines={2}>
+                    {transferModalItem.asset.name}
+                  </Text>
+                </View>
+
+                {/* Location movement route */}
+                <View style={styles.transferRouteContainer}>
+                  <View style={styles.transferRouteItem}>
+                    <Text style={styles.transferRouteLabel}>FROM (ASSIGNED)</Text>
+                    <View style={styles.transferRouteValueRow}>
+                      <Ionicons name="business-outline" size={15} color="#64748b" style={{ marginRight: 6 }} />
+                      <Text style={styles.transferRouteValue} numberOfLines={1}>
+                        {transferModalItem.expectedLocation?.name || 'Unassigned'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.transferRouteArrowCol}>
+                    <Ionicons name="arrow-down" size={18} color={theme.colors.primary} />
+                  </View>
+
+                  <View style={[styles.transferRouteItem, styles.transferRouteItemDestination]}>
+                    <Text style={[styles.transferRouteLabel, { color: theme.colors.primary }]}>TO (SCANNED AT)</Text>
+                    <View style={styles.transferRouteValueRow}>
+                      <Ionicons name="location" size={15} color={theme.colors.primary} style={{ marginRight: 6 }} />
+                      <Text style={[styles.transferRouteValue, { color: '#0f172a', fontWeight: '600' }]} numberOfLines={1}>
+                        {transferModalItem.foundLocation?.name || session?.location?.name || 'Current Station'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Transfer Reason Input */}
+                <Text style={styles.inputLabel}>Reason / Notes</Text>
+                <TextInput
+                  style={styles.transferReasonInput}
+                  value={transferReason}
+                  onChangeText={setTransferReason}
+                  placeholder="Enter reason for location transfer..."
+                  placeholderTextColor="#94a3b8"
+                  multiline
+                  numberOfLines={3}
+                  editable={!isSubmittingTransfer}
+                />
+
+                <View style={styles.transferNoticeBox}>
+                  <Ionicons name="information-circle-outline" size={16} color="#0369a1" style={{ marginRight: 6 }} />
+                  <Text style={styles.transferNoticeText}>
+                    Submitting creates a pending transfer in the system. An asset manager can approve this transfer to officially update the station record.
+                  </Text>
+                </View>
+              </ScrollView>
+            )}
+
+            <View style={styles.modalFooterActions}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setTransferModalItem(null)}
+                disabled={isSubmittingTransfer}
+              >
+                <Text style={styles.modalCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalSubmitBtn, isSubmittingTransfer && { opacity: 0.6 }]}
+                onPress={handleSubmitTransfer}
+                disabled={isSubmittingTransfer}
+              >
+                {isSubmittingTransfer ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <>
+                    <Ionicons name="paper-plane-outline" size={15} color="#ffffff" style={{ marginRight: 6 }} />
+                    <Text style={styles.modalSubmitBtnText}>Submit Transfer</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -1031,7 +1628,7 @@ export const SessionInventoryScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: '#ffffff',
   },
   topNavbar: {
     flexDirection: 'row',
@@ -1443,19 +2040,82 @@ const styles = StyleSheet.create({
   relocatedBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    backgroundColor: theme.colors.warningLight,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 5,
-    marginBottom: 6,
+    justifyContent: 'space-between',
+    backgroundColor: '#fffbeb',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 7,
+    marginBottom: 8,
     borderWidth: 1,
-    borderColor: theme.colors.warningBorder,
+    borderColor: '#fde68a',
+  },
+  relocatedBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 6,
+    marginRight: 8,
   },
   relocatedBannerText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#92400e',
+    flex: 1,
+  },
+  transferBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 5,
+    shadowColor: theme.colors.primary,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  transferBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  transferPendingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 5,
+  },
+  transferPendingBadgeText: {
     fontSize: 10,
     fontWeight: '700',
-    color: theme.colors.warning,
+    color: '#b45309',
+  },
+  relocatedBannerFinalized: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+  },
+  relocatedBannerTextFinalized: {
+    color: '#15803d',
+  },
+  transferCompletedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 5,
+  },
+  transferCompletedBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#15803d',
   },
   itemFooterRow: {
     flexDirection: 'row',
@@ -1483,6 +2143,21 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: theme.colors.textSecondary,
+  },
+  markMissingRowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  markMissingRowBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#dc2626',
   },
   scannedTimeText: {
     fontSize: 10,
@@ -1563,11 +2238,25 @@ const styles = StyleSheet.create({
     marginTop: 6,
     borderRadius: 8,
   },
+  floatingToastError: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#fca5a5',
+  },
+  floatingToastWarning: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#fcd34d',
+  },
   floatingToastText: {
     fontSize: 12,
     fontWeight: '700',
     color: '#166534',
     flex: 1,
+  },
+  floatingToastTextError: {
+    color: '#991b1b',
+  },
+  floatingToastTextWarning: {
+    color: '#92400e',
   },
   itemStatusRow: {
     flexDirection: 'row',
@@ -1668,10 +2357,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#4ade80',
   },
+  scannerFeedbackPillError: {
+    backgroundColor: 'rgba(153, 27, 27, 0.95)',
+    borderColor: '#f87171',
+  },
+  scannerFeedbackPillWarning: {
+    backgroundColor: 'rgba(180, 83, 9, 0.95)',
+    borderColor: '#facc15',
+  },
   scannerFeedbackText: {
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '700',
+  },
+  scannerFeedbackTextError: {
+    color: '#fecaca',
+  },
+  scannerFeedbackTextWarning: {
+    color: '#fef08a',
   },
   viewfinderBox: {
     width: 250,
@@ -1750,6 +2453,194 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '700',
+  },
+  // Modal styles for Transfer Confirmation
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  modalContentCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: '85%',
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    marginBottom: 14,
+  },
+  modalHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  modalHeaderIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  modalBody: {
+    marginBottom: 12,
+  },
+  transferAssetSummary: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 14,
+  },
+  transferAssetCode: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: theme.colors.primary,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    letterSpacing: 0.5,
+  },
+  transferAssetName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginTop: 3,
+  },
+  transferRouteContainer: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 14,
+  },
+  transferRouteItem: {
+    paddingVertical: 4,
+  },
+  transferRouteItemDestination: {
+    backgroundColor: '#f0fdf4',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  transferRouteLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    letterSpacing: 0.5,
+    marginBottom: 3,
+  },
+  transferRouteValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  transferRouteValue: {
+    fontSize: 13,
+    color: '#334155',
+    fontWeight: '500',
+    flex: 1,
+  },
+  transferRouteArrowCol: {
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155',
+    marginBottom: 6,
+  },
+  transferReasonInput: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 13,
+    color: '#0f172a',
+    backgroundColor: '#ffffff',
+    textAlignVertical: 'top',
+    minHeight: 65,
+    marginBottom: 12,
+  },
+  transferNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#f0f9ff',
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+    borderRadius: 6,
+    padding: 9,
+    marginBottom: 6,
+  },
+  transferNoticeText: {
+    fontSize: 11,
+    color: '#0369a1',
+    flex: 1,
+    lineHeight: 15,
+  },
+  modalFooterActions: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+  },
+  modalCancelBtn: {
+    flex: 1,
+    paddingVertical: 11,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+  modalCancelBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  modalSubmitBtn: {
+    flex: 1.6,
+    flexDirection: 'row',
+    paddingVertical: 11,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.primary,
+  },
+  modalSubmitBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ffffff',
   },
 });
 

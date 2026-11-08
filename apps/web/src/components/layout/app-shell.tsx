@@ -5,6 +5,7 @@ import { TopNavbar } from '@/components/navigation/top-navbar';
 import { MobileBottomNav } from '@/components/navigation/mobile-bottom-nav';
 import { DesktopSidebar } from '@/components/navigation/desktop-sidebar';
 import { PwaRegister } from '@/components/pwa/pwa-register';
+import { SWRProvider } from '@/components/providers/swr-provider';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -13,15 +14,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (isLoginPage) {
     return (
-      <main className="min-h-screen w-full flex flex-col justify-center items-center p-4">
-        {children}
-        <PwaRegister />
-      </main>
+      <SWRProvider>
+        <main className="min-h-screen w-full flex flex-col justify-center items-center p-4">
+          {children}
+          <PwaRegister />
+        </main>
+      </SWRProvider>
     );
   }
 
   return (
-    <>
+    <SWRProvider>
       {/* PWA Service Worker & Install Prompt Banner */}
       <PwaRegister />
 
@@ -51,7 +54,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="print:hidden">
         <MobileBottomNav />
       </div>
-    </>
+    </SWRProvider>
   );
 }
 

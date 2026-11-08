@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import Link from 'next/link';
 import {
   QrCode,
@@ -32,50 +32,24 @@ interface AssetSummary {
 }
 
 export default function DashboardPage() {
-  const [loading, setLoading] = useState(true);
-  const [totalAssets, setTotalAssets] = useState(0);
-  const [activeAssets, setActiveAssets] = useState(0);
-  const [maintenanceCount, setMaintenanceCount] = useState(0);
-  const [totalValue, setTotalValue] = useState(0);
-  const [recentAssets, setRecentAssets] = useState<AssetSummary[]>([]);
+  const { data: rawKpi, isLoading: kpiLoading } = useSWR('/api/dashboard/kpis');
+  const { data: rawAssets, isLoading: assetsLoading } = useSWR(
+    '/api/assets?limit=5&sortBy=createdAt&sortOrder=desc'
+  );
 
-  useEffect(() => {
-    let isCancelled = false;
-    const fetchDashboard = async () => {
-      try {
-        const [kpiRes, assetsRes] = await Promise.all([
-          fetch('/api/dashboard/kpis').catch(() => null),
-          fetch('/api/assets?limit=5&sortBy=createdAt&sortOrder=desc').catch(() => null),
-        ]);
+  const loading = kpiLoading && assetsLoading && !rawKpi && !rawAssets;
+  const kpiData = rawKpi?.data || rawKpi || {};
+  const assetsList: AssetSummary[] = Array.isArray(rawAssets?.data)
+    ? rawAssets.data
+    : Array.isArray(rawAssets)
+    ? rawAssets
+    : [];
 
-        if (!isCancelled) {
-          if (kpiRes && kpiRes.ok) {
-            const kpiData = await kpiRes.json();
-            setTotalAssets(kpiData.totalAssets || 0);
-            setActiveAssets(kpiData.activeAssets || 0);
-            setMaintenanceCount(kpiData.maintenanceCount || 0);
-            setTotalValue(kpiData.totalValue || 0);
-          }
-          if (assetsRes && assetsRes.ok) {
-            const assetsData = await assetsRes.json();
-            setRecentAssets(assetsData.data || []);
-            if (!kpiRes || !kpiRes.ok) {
-              setTotalAssets(assetsData.meta?.total || assetsData.data?.length || 0);
-            }
-          }
-        }
-      } catch (e) {
-        // ignore
-      } finally {
-        if (!isCancelled) setLoading(false);
-      }
-    };
-
-    fetchDashboard();
-    return () => {
-      isCancelled = true;
-    };
-  }, []);
+  const totalAssets = kpiData.totalAssets || rawAssets?.meta?.total || assetsList.length || 0;
+  const activeAssets = kpiData.activeAssets || 0;
+  const maintenanceCount = kpiData.assetsInMaintenance ?? kpiData.maintenanceCount ?? 0;
+  const totalValue = kpiData.totalAssetValue ?? kpiData.totalValue ?? 0;
+  const recentAssets = assetsList;
 
   const formatCurrency = (val: number) => {
     if (val >= 10000000) return `BDT ${(val / 10000000).toFixed(2)} Cr`;

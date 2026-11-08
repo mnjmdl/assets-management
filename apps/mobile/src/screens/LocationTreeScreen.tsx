@@ -5,17 +5,18 @@ import {
   View,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   TextInput,
   ActivityIndicator,
   Modal,
   Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import {
   getAllCachedLocations,
   getLocationAssetCounts,
+  getLocationDirectAssetCounts,
   CachedLocation,
 } from '../database/db';
 import { apiRequest } from '../services/api';
@@ -30,6 +31,8 @@ export interface LocationTreeNode {
   parentId?: string | null;
   qrCode?: string;
   assetCount?: number;
+  totalAssetCount?: number;
+  directAssetCount?: number;
   children?: LocationTreeNode[];
 }
 
@@ -53,12 +56,30 @@ export const LocationTreeScreen = () => {
   const loadTree = async () => {
     setIsLoading(true);
     try {
+      // Helper to ensure all parent nodes recursively rollup child and grandchild quantities without double-counting
+      const rollupTree = (node: LocationTreeNode): number => {
+        const direct =
+          node.directAssetCount !== undefined
+            ? node.directAssetCount
+            : (node.children && node.children.length > 0 ? 0 : (node.assetCount || 0));
+        let sum = direct;
+        if (node.children && node.children.length > 0) {
+          for (const child of node.children) {
+            sum += rollupTree(child);
+          }
+        }
+        node.assetCount = sum;
+        node.totalAssetCount = sum;
+        return sum;
+      };
+
       // 1. Try online live tree if connected
       if (!isOfflineMode) {
         try {
           const res = await apiRequest<any>('/locations/tree', { timeoutMs: 5000 });
           const liveTree = Array.isArray(res) ? res : res?.data;
           if (Array.isArray(liveTree) && liveTree.length > 0) {
+            liveTree.forEach(rollupTree);
             setTreeData(liveTree);
             initializeExpanded(liveTree);
             setIsLoading(false);
@@ -70,8 +91,9 @@ export const LocationTreeScreen = () => {
       }
 
       // 2. Offline / Local SQLite tree construction
-      const [cachedLocs, assetCounts] = await Promise.all([
+      const [cachedLocs, directCounts, rolledUpCounts] = await Promise.all([
         getAllCachedLocations(),
+        getLocationDirectAssetCounts(),
         getLocationAssetCounts(),
       ]);
 
@@ -84,7 +106,9 @@ export const LocationTreeScreen = () => {
           type: loc.type,
           parentId: loc.parentId,
           qrCode: loc.code,
-          assetCount: assetCounts[loc.id] || 0,
+          directAssetCount: directCounts[loc.id] || 0,
+          assetCount: rolledUpCounts[loc.id] || 0,
+          totalAssetCount: rolledUpCounts[loc.id] || 0,
           children: [],
         });
       });
@@ -98,6 +122,7 @@ export const LocationTreeScreen = () => {
         }
       });
 
+      rootNodes.forEach(rollupTree);
       setTreeData(rootNodes);
       initializeExpanded(rootNodes);
     } catch (err) {
@@ -241,7 +266,7 @@ export const LocationTreeScreen = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       {/* Top Navbar Header */}
       <View style={styles.navbar}>
         <TouchableOpacity
@@ -403,7 +428,7 @@ export const LocationTreeScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: '#ffffff',
   },
   navbar: {
     flexDirection: 'row',

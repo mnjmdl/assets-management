@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import useSWR from 'swr';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -100,22 +101,45 @@ export default function TransfersPage() {
   const prefillAssetCode = searchParams?.get('code') || '';
   const prefillToLoc = searchParams?.get('toLocationId') || '';
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    data: rawTransfers,
+    error: transError,
+    isLoading: transLoading,
+    mutate: mutateTransfers,
+  } = useSWR('/api/transfers?limit=100');
 
-  // Transfers & stats data
-  const [transfers, setTransfers] = useState<TransferItem[]>([]);
-  const [stats, setStats] = useState<TransferStats>({
+  const { data: rawStats, mutate: mutateStats } = useSWR('/api/transfers/stats');
+  const { data: rawDepts } = useSWR('/api/transfers/departments');
+  const { data: rawLocs } = useSWR('/api/locations');
+
+  const transfers: TransferItem[] = Array.isArray(rawTransfers?.data)
+    ? rawTransfers.data
+    : Array.isArray(rawTransfers)
+    ? rawTransfers
+    : [];
+
+  const stats: TransferStats = rawStats?.data || rawStats || {
     total: 0,
     pending: 0,
     approved: 0,
     completed: 0,
     rejected: 0,
-  });
+  };
 
-  // Reference options for create transfer
-  const [departments, setDepartments] = useState<DepartmentOption[]>([]);
-  const [locations, setLocations] = useState<LocationOption[]>([]);
+  const departments: DepartmentOption[] = Array.isArray(rawDepts?.data)
+    ? rawDepts.data
+    : Array.isArray(rawDepts)
+    ? rawDepts
+    : [];
+
+  const locations: LocationOption[] = Array.isArray(rawLocs?.data)
+    ? rawLocs.data
+    : Array.isArray(rawLocs)
+    ? rawLocs
+    : [];
+
+  const loading = transLoading && transfers.length === 0;
+  const error = transError ? transError.message || 'Could not load asset transfers' : null;
 
   // Filter States
   const [statusTab, setStatusTab] = useState<string>('ALL');
@@ -149,65 +173,15 @@ export default function TransfersPage() {
   } | null>(null);
   const [isActionSubmitting, setIsActionSubmitting] = useState(false);
 
-  // Fetch transfers and summary stats
-  const fetchTransfers = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [transRes, statsRes] = await Promise.all([
-        fetch('/api/transfers?limit=100'),
-        fetch('/api/transfers/stats'),
-      ]);
-
-      if (transRes.ok) {
-        const json = await transRes.json();
-        const list = Array.isArray(json?.data) ? json.data : [];
-        setTransfers(list);
-      }
-
-      if (statsRes.ok) {
-        const statsJson = await statsRes.json();
-        if (statsJson?.data) setStats(statsJson.data);
-      }
-    } catch (err: any) {
-      console.error('Error loading transfers:', err);
-      setError(err.message || 'Could not load asset transfers');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Fetch departments and locations reference lists
-  const fetchReferences = async () => {
-    try {
-      const [deptRes, locRes] = await Promise.all([
-        fetch('/api/transfers/departments'),
-        fetch('/api/locations'),
-      ]);
-
-      if (deptRes.ok) {
-        const deptJson = await deptRes.json();
-        const dList = Array.isArray(deptJson?.data) ? deptJson.data : [];
-        setDepartments(dList);
-        if (dList.length > 0 && !formToDeptId) {
-          setFormToDeptId(dList[0].id);
-        }
-      }
-
-      if (locRes.ok) {
-        const locJson = await locRes.json();
-        const lList = Array.isArray(locJson?.data) ? locJson.data : [];
-        setLocations(lList);
-      }
-    } catch (e) {
-      console.error('Error fetching references:', e);
-    }
-  };
-
   useEffect(() => {
-    fetchTransfers();
-    fetchReferences();
-  }, []);
+    if (departments.length > 0 && !formToDeptId) {
+      setFormToDeptId(departments[0].id);
+    }
+  }, [departments, formToDeptId]);
+
+  const fetchTransfers = async () => {
+    await Promise.all([mutateTransfers(), mutateStats()]);
+  };
 
   // Handle pre-fill asset from query param
   useEffect(() => {

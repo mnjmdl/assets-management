@@ -80,8 +80,52 @@ export class AuditsController {
 
   @Put('sessions/:id/complete')
   @ApiOperation({ summary: 'Mark an audit session as complete' })
-  completeSession(@Param('id') id: string, @CurrentUser() user: any) {
-    return this.auditsService.completeSession(id, user?.id || 'admin');
+  completeSession(
+    @Param('id') id: string,
+    @Body() body: { markUnscannedAsMissing?: boolean },
+    @CurrentUser() user: any,
+  ) {
+    return this.auditsService.completeSession(id, user?.id || 'admin', Boolean(body?.markUnscannedAsMissing));
+  }
+
+  @Put('sessions/:id/mark-unscanned-missing')
+  @ApiOperation({ summary: 'Mark all pending unscanned items in a session as missing' })
+  markSessionUnscannedMissing(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.auditsService.markUnscannedItemsAsMissing(id, user?.id || 'admin');
+  }
+
+  @Put('plans/:id/mark-unscanned-missing')
+  @ApiOperation({ summary: 'Mark all pending unscanned items in an audit plan as missing' })
+  markPlanUnscannedMissing(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.auditsService.markPlanUnscannedAsMissing(id, user?.id || 'admin');
+  }
+
+  @Put('sessions/:sessionId/items/:itemId/mark-missing')
+  @ApiOperation({ summary: 'Mark a single audit item as missing' })
+  markItemMissing(
+    @Param('itemId') itemId: string,
+    @Body() body: { notes?: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.auditsService.markItemMissing(itemId, user?.id || 'admin', body?.notes);
+  }
+
+  @Put('discrepancies/:id/approve-lost')
+  @ApiOperation({ summary: 'Manager approval: confirm missing asset and mark as LOST in master registry' })
+  approveMissingAsLost(
+    @Param('id') id: string,
+    @Body() body: { notes?: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.auditsService.resolveDiscrepancy(
+      id,
+      {
+        resolutionNotes: body?.notes || 'Confirmed missing & marked as LOST by manager',
+        action: 'MARK_LOST',
+        markAssetAsLost: true,
+      },
+      user?.id || 'admin',
+    );
   }
 
   @Put('sessions/:id/reopen')

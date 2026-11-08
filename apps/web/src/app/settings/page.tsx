@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import { useRouter } from 'next/navigation';
 import {
   Settings,
@@ -89,7 +90,6 @@ type TabType =
 export default function SettingsPage() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabType>('general');
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -106,14 +106,37 @@ export default function SettingsPage() {
     router.refresh();
   };
 
-  // Settings State
+  const { data: rawSettings, mutate: mutateSettings } = useSWR('/api/settings');
+  const { data: rawStats, mutate: mutateStats } = useSWR('/api/settings/stats');
+  const { data: rawCategories, mutate: mutateCategories } = useSWR('/api/settings/categories');
+  const { data: rawUsers, mutate: mutateUsers } = useSWR('/api/settings/users');
+
   const [settings, setSettings] = useState<Record<string, string>>({});
 
-  // System Stats State
-  const [stats, setStats] = useState<SystemStats | null>(null);
+  useEffect(() => {
+    if (rawSettings) {
+      const s = rawSettings?.data || rawSettings;
+      if (typeof s === 'object' && s !== null) {
+        setSettings((prev) => ({ ...s, ...prev }));
+      }
+    }
+  }, [rawSettings]);
+
+  const stats: SystemStats | null = rawStats?.data || rawStats || null;
+  const categories: CategoryItem[] = Array.isArray(rawCategories?.data)
+    ? rawCategories.data
+    : Array.isArray(rawCategories)
+    ? rawCategories
+    : [];
+  const users: UserItem[] = Array.isArray(rawUsers?.data)
+    ? rawUsers.data
+    : Array.isArray(rawUsers)
+    ? rawUsers
+    : [];
+
+  const loading = !rawSettings && !rawStats;
 
   // Categories State
-  const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<CategoryItem | null>(null);
   const [categoryForm, setCategoryForm] = useState({
@@ -124,7 +147,6 @@ export default function SettingsPage() {
   });
 
   // Users State
-  const [users, setUsers] = useState<UserItem[]>([]);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [userForm, setUserForm] = useState({
     name: '',
@@ -136,43 +158,8 @@ export default function SettingsPage() {
 
   // Fetch all initial data
   const loadData = async () => {
-    setLoading(true);
-    setErrorMessage(null);
-    try {
-      const [resSettings, resStats, resCategories, resUsers] = await Promise.all([
-        fetch('/api/settings'),
-        fetch('/api/settings/stats'),
-        fetch('/api/settings/categories'),
-        fetch('/api/settings/users'),
-      ]);
-
-      if (resSettings.ok) {
-        const json = await resSettings.json();
-        setSettings(json?.data || json || {});
-      }
-      if (resStats.ok) {
-        const json = await resStats.json();
-        setStats(json?.data || json);
-      }
-      if (resCategories.ok) {
-        const json = await resCategories.json();
-        setCategories(json?.data || json || []);
-      }
-      if (resUsers.ok) {
-        const json = await resUsers.json();
-        setUsers(json?.data || json || []);
-      }
-    } catch (err: any) {
-      console.error('Failed to load settings data:', err);
-      setErrorMessage(err?.message || 'Failed to load configuration data');
-    } finally {
-      setLoading(false);
-    }
+    await Promise.all([mutateSettings(), mutateStats(), mutateCategories(), mutateUsers()]);
   };
-
-  useEffect(() => {
-    loadData();
-  }, []);
 
   // Save Settings
   const handleSaveSettings = async (e?: React.FormEvent) => {
@@ -256,12 +243,7 @@ export default function SettingsPage() {
       }
 
       setIsCategoryModalOpen(false);
-      // Refresh categories
-      const res = await fetch('/api/settings/categories');
-      if (res.ok) {
-        const json = await res.json();
-        setCategories(json?.data || json || []);
-      }
+      await mutateCategories();
       setSaveMessage(editingCategory ? 'Category updated!' : 'Category created!');
       setTimeout(() => setSaveMessage(null), 3500);
     } catch (err: any) {
@@ -283,7 +265,7 @@ export default function SettingsPage() {
         throw new Error(err.message || 'Failed to delete category');
       }
 
-      setCategories((prev) => prev.filter((c) => c.id !== cat.id));
+      await mutateCategories();
       setSaveMessage(`Category "${cat.name}" removed successfully!`);
       setTimeout(() => setSaveMessage(null), 3500);
     } catch (err: any) {
@@ -309,12 +291,7 @@ export default function SettingsPage() {
       setIsUserModalOpen(false);
       setUserForm({ name: '', email: '', password: '', role: 'AUDITOR', phone: '' });
 
-      // Refresh users
-      const refreshRes = await fetch('/api/settings/users');
-      if (refreshRes.ok) {
-        const json = await refreshRes.json();
-        setUsers(json?.data || json || []);
-      }
+      await mutateUsers();
       setSaveMessage('New user registered successfully!');
       setTimeout(() => setSaveMessage(null), 3500);
     } catch (err: any) {
@@ -335,9 +312,7 @@ export default function SettingsPage() {
         throw new Error(err.message || 'Failed to update user status');
       }
 
-      setUsers((prev) =>
-        prev.map((u) => (u.id === user.id ? { ...u, isActive: !user.isActive } : u))
-      );
+      await mutateUsers();
       setSaveMessage(`User "${user.name}" status updated!`);
       setTimeout(() => setSaveMessage(null), 3000);
     } catch (err: any) {

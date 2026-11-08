@@ -1,0 +1,40 @@
+# =============================================================================
+# Multi-Stage Production Dockerfile for Next.js Web Portal
+# =============================================================================
+
+FROM node:20-bookworm-slim AS base
+WORKDIR /app
+RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+FROM base AS builder
+WORKDIR /app
+
+# Copy monorepo manifests
+COPY package*.json turbo.json ./
+COPY packages/ ./packages/
+COPY apps/web/ ./apps/web/
+
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+
+# Install dependencies and build
+RUN npm ci --include=dev
+RUN npm run build --workspace=@repo/types
+RUN npm run build --workspace=@repo/validators
+RUN npm run build --workspace=@repo/web
+
+# Production Runner
+FROM base AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+# Copy standalone build
+COPY --from=builder /app/apps/web/.next/standalone/ ./
+COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder /app/apps/web/public ./apps/web/public
+
+EXPOSE 3000
+CMD ["node", "apps/web/server.js"]
+

@@ -20,9 +20,11 @@ export function middleware(request: NextRequest) {
   }
 
   // 2. Read authorization cookie or header
+  const authHeader = request.headers.get('authorization');
   const token =
     request.cookies.get('auth_token')?.value ||
-    request.cookies.get('accessToken')?.value;
+    request.cookies.get('accessToken')?.value ||
+    (authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null);
 
   // 3. Allow public auth endpoints
   if (

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import useSWR from 'swr';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -15,6 +16,8 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  ChevronDown,
+  ChevronUp,
   Loader2,
   RotateCcw,
   Boxes,
@@ -33,7 +36,11 @@ import {
   BarChart3,
   ArrowLeftRight,
   Wrench,
+  ExternalLink,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -122,14 +129,164 @@ export default function AuditPlanDetailPage() {
   const router = useRouter();
   const planId = params?.id as string;
 
-  const [plan, setPlan] = useState<AuditPlanDetails | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    data: rawPlan,
+    error: planError,
+    isLoading: planLoading,
+    mutate: mutatePlan,
+  } = useSWR(planId ? `/api/audits/plans/${planId}` : null, {
+    refreshInterval: 30000, // Auto-update every 30 seconds
+    revalidateOnFocus: true, // Auto-refresh when tab/window becomes active
+    revalidateOnReconnect: true,
+  });
+
+  const plan: AuditPlanDetails | null =
+    rawPlan?.data !== undefined ? rawPlan.data : rawPlan || null;
+  const loading = planLoading && !plan;
+  const error = planError ? planError?.message || 'Could not load plan details' : null;
 
   // Selected active session & items
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [sessionItems, setSessionItems] = useState<AuditItem[]>([]);
-  const [loadingItems, setLoadingItems] = useState(false);
+  const [isSessionsCollapsed, setIsSessionsCollapsed] = useState(false);
+
+  const selectedSession = useMemo(() => {
+    return plan?.sessions.find((s) => s.id === selectedSessionId) || null;
+  }, [plan?.sessions, selectedSessionId]);
+
+  useEffect(() => {
+    if (plan?.sessions && plan.sessions.length > 0 && !selectedSessionId) {
+      setSelectedSessionId(plan.sessions[0].id);
+    }
+  }, [plan, selectedSessionId]);
+
+  const {
+    data: rawItems,
+    isLoading: itemsLoading,
+    mutate: mutateSessionItems,
+  } = useSWR(selectedSessionId ? `/api/audits/sessions/${selectedSessionId}/items` : null, {
+    refreshInterval: 30000, // Auto-update every 30 seconds
+    revalidateOnFocus: true, // Auto-refresh when tab/window becomes active
+    revalidateOnReconnect: true,
+  });
+
+  const sessionItems: AuditItem[] = Array.isArray(rawItems?.data)
+    ? rawItems.data
+    : Array.isArray(rawItems)
+      ? rawItems
+      : [];
+  const loadingItems = itemsLoading && sessionItems.length === 0;
+
+  const { data: rawLocations } = useSWR('/api/locations');
+  const locations: LocationOption[] = Array.isArray(rawLocations?.data)
+    ? rawLocations.data
+    : Array.isArray(rawLocations)
+      ? rawLocations
+      : [];
+
+  // Pending Transfers SWR to track active transfer requests
+  const { data: rawTransfers, mutate: mutateTransfers } = useSWR(
+    '/api/transfers?status=PENDING&limit=200',
+    {
+      refreshInterval: 30000, // Auto-update every 30 seconds
+      revalidateOnFocus: true,
+    },
+  );
+
+  // Auto-refresh when browser window/tab becomes active or visible
+  useEffect(() => {
+    const handleActive = () => {
+      mutatePlan();
+      if (selectedSessionId) {
+        mutateSessionItems();
+      }
+      mutateTransfers();
+    };
+
+    window.addEventListener('focus', handleActive);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleActive();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', handleActive);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [mutatePlan, mutateSessionItems, mutateTransfers, selectedSessionId]);
+  const pendingTransfers: any[] = Array.isArray(rawTransfers?.data)
+    ? rawTransfers.data
+    : Array.isArray(rawTransfers)
+      ? rawTransfers
+      : [];
+
+  // Transfer Generation Modal State
+  const [transferModalItem, setTransferModalItem] = useState<AuditItem | null>(null);
+  const [transferReason, setTransferReason] = useState<string>('');
+  const [isGeneratingTransfer, setIsGeneratingTransfer] = useState(false);
+  const [transferFormError, setTransferFormError] = useState<string | null>(null);
+  const [transferSuccessBanner, setTransferSuccessBanner] = useState<string | null>(null);
+  const [generatedTransferAssetIds, setGeneratedTransferAssetIds] = useState<Set<string>>(new Set());
+
+  const getPendingTransferForAsset = (assetId: string) => {
+    return (
+      generatedTransferAssetIds.has(assetId) ||
+      pendingTransfers.find((t: any) => t.assetId === assetId)
+    );
+  };
+
+  const handleOpenTransferModal = (item: AuditItem) => {
+    setTransferModalItem(item);
+    setTransferFormError(null);
+    const fromName = item.expectedLocation?.name || 'Unassigned Location';
+    const toName = item.foundLocation?.name || 'Current Station';
+    setTransferReason(
+      `Audit relocation: Asset ${item.asset.assetCode} physically found at ${toName} (previously assigned to ${fromName})`,
+    );
+  };
+
+  const handleConfirmTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transferModalItem || !transferModalItem.foundLocation) return;
+
+    setIsGeneratingTransfer(true);
+    setTransferFormError(null);
+
+    try {
+      const res = await fetch('/api/transfers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assetId: transferModalItem.asset.id,
+          toLocationId: transferModalItem.foundLocation.id,
+          reason: transferReason.trim(),
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson?.message || 'Failed to generate transfer request');
+      }
+
+      setGeneratedTransferAssetIds((prev) => new Set(prev).add(transferModalItem.asset.id));
+      await mutateTransfers();
+
+      const fromName = transferModalItem.expectedLocation?.name || 'Previous Location';
+      const toName = transferModalItem.foundLocation?.name || 'Current Location';
+
+      setTransferSuccessBanner(
+        `Location transfer request generated for ${transferModalItem.asset.assetCode} (${fromName} → ${toName})! It is now pending approval.`,
+      );
+      setTimeout(() => setTransferSuccessBanner(null), 8000);
+
+      setTransferModalItem(null);
+    } catch (err: any) {
+      setTransferFormError(err.message || 'Could not generate transfer');
+    } finally {
+      setIsGeneratingTransfer(false);
+    }
+  };
 
   // Checklist Pagination & Filtering
   const [checklistPage, setChecklistPage] = useState(1);
@@ -186,7 +343,6 @@ export default function AuditPlanDetailPage() {
 
   // Create session modal state
   const [isSessionModalOpen, setIsSessionModalOpen] = useState(false);
-  const [locations, setLocations] = useState<LocationOption[]>([]);
   const [isSubmittingSession, setIsSubmittingSession] = useState(false);
   const [sessionFormError, setSessionFormError] = useState<string | null>(null);
   const [sessionForm, setSessionForm] = useState({
@@ -195,30 +351,11 @@ export default function AuditPlanDetailPage() {
   });
 
   const fetchPlanDetails = async () => {
-    if (!planId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/audits/plans/${planId}`);
-      if (!res.ok) {
-        throw new Error(`Failed to load audit plan (${res.status})`);
-      }
-      const json = await res.json();
-      const planData: AuditPlanDetails = json?.data !== undefined ? json.data : json;
-      setPlan(planData);
-
-      // Auto-select first session if available
-      if (planData.sessions && planData.sessions.length > 0) {
-        const firstSessionId = planData.sessions[0].id;
-        setSelectedSessionId((prev) => prev || firstSessionId);
-        fetchSessionItems(firstSessionId);
-      }
-    } catch (err: any) {
-      console.error('Error fetching plan:', err);
-      setError(err?.message || 'Could not load plan details');
-    } finally {
-      setLoading(false);
-    }
+    await Promise.all([
+      mutatePlan(),
+      selectedSessionId ? mutateSessionItems() : Promise.resolve(),
+      mutateTransfers(),
+    ]);
   };
 
   const fetchSessionItems = async (sessionId: string) => {
@@ -226,46 +363,7 @@ export default function AuditPlanDetailPage() {
     setChecklistPage(1);
     setChecklistSearch('');
     setChecklistStatusFilter('ALL');
-    setLoadingItems(true);
-    try {
-      const res = await fetch(`/api/audits/sessions/${sessionId}/items`);
-      if (res.ok) {
-        const json = await res.json();
-        const items: AuditItem[] = Array.isArray(json?.data)
-          ? json.data
-          : Array.isArray(json)
-          ? json
-          : [];
-        setSessionItems(items);
-      }
-    } catch (err) {
-      console.error('Error fetching session items:', err);
-    } finally {
-      setLoadingItems(false);
-    }
   };
-
-  const fetchLocations = async () => {
-    try {
-      const res = await fetch('/api/locations');
-      if (res.ok) {
-        const json = await res.json();
-        const list: LocationOption[] = Array.isArray(json?.data)
-          ? json.data
-          : Array.isArray(json)
-          ? json
-          : [];
-        setLocations(list);
-      }
-    } catch (e) {
-      console.error('Failed to load locations:', e);
-    }
-  };
-
-  useEffect(() => {
-    fetchPlanDetails();
-    fetchLocations();
-  }, [planId]);
 
   // Filter session locations based on the audit plan's location scope (parent company, unit, or block)
   const { sessionLocations, planLocationName, isCompanyAudit, planScopeType } = useMemo(() => {
@@ -390,7 +488,7 @@ export default function AuditPlanDetailPage() {
       await fetchPlanDetails();
       if (selectedSessionId === sessionId) {
         setSelectedSessionId(null);
-        setSessionItems([]);
+        mutateSessionItems([]);
       }
     } catch (e: any) {
       alert(e.message || 'Could not delete session');
@@ -398,16 +496,105 @@ export default function AuditPlanDetailPage() {
   };
 
   const handleCompleteSession = async (sessionId: string) => {
+    const isSelected = selectedSessionId === sessionId;
+    const targetItems = isSelected ? sessionItems : [];
+    const pendingCount = targetItems.filter((i) => i.status === 'PENDING').length;
+    let markUnscannedAsMissing = false;
+
+    if (pendingCount > 0) {
+      const choice = confirm(
+        `Session Completion Notice:\nThere are ${pendingCount} expected assets that were NOT scanned in this session.\n\nClick OK to mark all ${pendingCount} remaining items as MISSING.\nClick Cancel to complete the session while leaving them as PENDING.`,
+      );
+      markUnscannedAsMissing = choice;
+    }
+
     try {
       const res = await fetch(`/api/audits/sessions/${sessionId}/complete`, {
         method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markUnscannedAsMissing }),
       });
       if (!res.ok) {
         throw new Error('Failed to mark session as complete');
       }
       await fetchPlanDetails();
+      if (isSelected) {
+        await mutateSessionItems();
+      }
     } catch (e: any) {
       alert(e.message || 'Could not complete session');
+    }
+  };
+
+  const handleMarkSessionUnscannedMissing = async (sessionId: string) => {
+    const pendingCount = sessionItems.filter((i) => i.status === 'PENDING').length;
+    if (pendingCount === 0) {
+      alert('There are no pending unscanned items in this session.');
+      return;
+    }
+    if (
+      !confirm(
+        `Are you sure you want to mark all ${pendingCount} unscanned items in this session as MISSING?`,
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/audits/sessions/${sessionId}/mark-unscanned-missing`, {
+        method: 'PUT',
+      });
+      if (!res.ok) throw new Error('Failed to mark unscanned items as missing');
+      await fetchPlanDetails();
+      await mutateSessionItems();
+      alert(`Successfully marked ${pendingCount} items as MISSING.`);
+    } catch (e: any) {
+      alert(e.message || 'Could not mark items as missing');
+    }
+  };
+
+  const handleMarkSingleItemMissing = async (itemId: string, assetCode: string) => {
+    if (!selectedSessionId) return;
+    if (!confirm(`Mark equipment "${assetCode}" as MISSING in this session?`)) return;
+
+    try {
+      const res = await fetch(`/api/audits/sessions/${selectedSessionId}/items/${itemId}/mark-missing`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: 'Marked as MISSING during web review' }),
+      });
+      if (!res.ok) throw new Error('Failed to mark item as missing');
+      await fetchPlanDetails();
+      await mutateSessionItems();
+    } catch (e: any) {
+      alert(e.message || 'Could not mark item as missing');
+    }
+  };
+
+  const handleApproveMissingAsLost = async (discrepancyId: string, assetCode: string) => {
+    const notes = prompt(
+      `MANAGER APPROVAL:\nConfirm write-off for equipment "${assetCode}"?\n\nThis will update the master catalog status to LOST and create an audit trail.\n\nEnter approval notes:`,
+      'Confirmed missing during inventory audit review',
+    );
+    if (notes === null) return; // User cancelled
+
+    try {
+      const res = await fetch(`/api/audits/discrepancies/${discrepancyId}/approve-lost`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Failed to approve missing asset');
+      }
+      await fetchPlanDetails();
+      if (selectedSessionId) {
+        await mutateSessionItems();
+      }
+      alert(`Asset "${assetCode}" has been approved as LOST and updated in master catalog.`);
+    } catch (e: any) {
+      alert(e.message || 'Could not approve missing asset');
     }
   };
 
@@ -420,6 +607,9 @@ export default function AuditPlanDetailPage() {
         throw new Error('Failed to reopen session');
       }
       await fetchPlanDetails();
+      if (selectedSessionId === sessionId) {
+        await mutateSessionItems();
+      }
     } catch (e: any) {
       alert(e.message || 'Could not reopen session');
     }
@@ -462,6 +652,7 @@ export default function AuditPlanDetailPage() {
     switch (status) {
       case 'VERIFIED':
         return <Badge variant="success">VERIFIED</Badge>;
+      case 'LOCATION_MISMATCH':
       case 'MISMATCH':
         return <Badge variant="warning">MISMATCH</Badge>;
       case 'DAMAGED':
@@ -532,10 +723,10 @@ export default function AuditPlanDetailPage() {
               <span>
                 {plan.scheduledDate
                   ? new Date(plan.scheduledDate).toLocaleDateString('en-US', {
-                      month: 'short',
-                      day: '2-digit',
-                      year: 'numeric',
-                    })
+                    month: 'short',
+                    day: '2-digit',
+                    year: 'numeric',
+                  })
                   : 'Unscheduled'}
               </span>
             </span>
@@ -571,7 +762,7 @@ export default function AuditPlanDetailPage() {
             size="icon"
             onClick={fetchPlanDetails}
             className="h-10 w-10 shadow-2xs"
-            title="Refresh"
+            title="Auto-refreshes on active & every 30s. Click to refresh immediately."
           >
             <RotateCcw className="w-4 h-4" />
           </Button>
@@ -635,180 +826,276 @@ export default function AuditPlanDetailPage() {
           <span className="text-sm sm:text-base font-bold text-foreground">
             {plan.scheduledDate
               ? new Date(plan.scheduledDate).toLocaleDateString('en-US', {
-                  month: 'short',
-                  day: '2-digit',
-                })
+                month: 'short',
+                day: '2-digit',
+              })
               : 'Flexible'}
           </span>
         </div>
       </div>
 
-      {/* Main Grid: Sessions on Left / Active Session Checklist on Right */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Left Column: Sessions List */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-bold text-sm tracking-tight flex items-center gap-1.5">
-              <Layers className="w-4 h-4 text-primary" />
-              <span>Active Sessions ({plan.sessions.length})</span>
-            </h2>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsSessionModalOpen(true)}
-              className="h-8 gap-1 text-xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>New</span>
-            </Button>
-          </div>
-
-          {plan.sessions.length === 0 ? (
-            <Card className="border-dashed p-6 text-center space-y-2">
-              <ClipboardCheck className="w-8 h-8 text-muted-foreground/60 mx-auto" />
-              <p className="text-xs font-medium text-foreground">No Sessions Created Yet</p>
-              <p className="text-[11px] text-muted-foreground">
-                Start a session to generate the physical inventory checklist for mobile scanning.
-              </p>
+      {/* Main Workspace: Left Sessions Sidebar + Right Checklist Area */}
+      <div className="flex flex-col lg:flex-row gap-4 items-start w-full">
+        {/* Left Column: Sessions Sidebar */}
+        <aside
+          className={cn(
+            'transition-all duration-300 ease-in-out shrink-0 select-none w-full',
+            isSessionsCollapsed ? 'lg:w-14' : 'lg:w-[310px] xl:w-[330px]'
+          )}
+        >
+          {isSessionsCollapsed ? (
+            /* Collapsed Rail View */
+            <div className="bg-card border rounded-xl p-2 flex flex-col items-center gap-2 shadow-2xs">
               <Button
-                size="sm"
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsSessionsCollapsed(false)}
+                className="h-8 w-8 text-primary hover:bg-primary/10 rounded-lg shrink-0"
+                title="Expand Sessions Sidebar"
+              >
+                <PanelLeftOpen className="w-4 h-4" />
+              </Button>
+
+              <Button
+                variant="outline"
+                size="icon"
                 onClick={() => setIsSessionModalOpen(true)}
-                className="gap-1.5 h-8 text-xs mt-2"
+                className="h-8 w-8 rounded-lg shrink-0 text-muted-foreground hover:text-foreground"
+                title="Start New Session"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Start First Session</span>
               </Button>
-            </Card>
-          ) : (
-            <div className="space-y-2.5">
-              {plan.sessions.map((sess) => {
-                const isSelected = sess.id === selectedSessionId;
-                return (
-                  <Card
-                    key={sess.id}
-                    onClick={() => fetchSessionItems(sess.id)}
-                    className={`cursor-pointer transition-all ${
-                      isSelected
-                        ? 'border-primary ring-1 ring-primary/40 bg-primary/5 shadow-xs'
-                        : 'hover:border-border hover:bg-muted/30'
-                    }`}
-                  >
-                    <CardContent className="p-3.5 space-y-2.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="space-y-0.5">
-                          <span className="font-semibold text-xs sm:text-sm text-foreground flex items-center gap-1.5">
-                            <Building className="w-3.5 h-3.5 text-primary" />
-                            <span>{sess.location?.name || 'All Scoped Locations'}</span>
-                          </span>
-                          <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                            <User className="w-3 h-3" />
-                            <span>Auditor: {sess.auditor?.name || 'Assigned Staff'}</span>
-                          </span>
-                        </div>
-                        <Badge
-                          variant={
-                            sess.status === 'IN_PROGRESS'
-                              ? 'warning'
-                              : sess.status === 'SUBMITTED'
-                              ? 'success'
-                              : 'secondary'
-                          }
-                          className="text-[10px]"
+
+              <div className="w-6 h-px bg-border my-0.5" />
+
+              {/* Quick Session Picker Icons */}
+              <div className="space-y-1.5 w-full flex flex-col items-center">
+                {plan.sessions.map((sess) => {
+                  const isSelected = sess.id === selectedSessionId;
+                  return (
+                    <button
+                      key={sess.id}
+                      onClick={() => setSelectedSessionId(sess.id)}
+                      title={`${sess.location?.name || 'All Scoped Stations'} (${sess._count?.items || 0} items) • Status: ${sess.status}`}
+                      className={cn(
+                        'h-9 w-9 rounded-lg flex items-center justify-center transition-all relative group',
+                        isSelected
+                          ? 'bg-primary text-primary-foreground shadow-xs font-bold ring-2 ring-primary/40'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground border border-transparent hover:border-border'
+                      )}
+                    >
+                      <Building className="w-4 h-4 shrink-0" />
+                      {Boolean(sess._count?.items) && (
+                        <span
+                          className={cn(
+                            'absolute -top-1 -right-1 text-[9px] px-1 rounded-full font-mono font-bold leading-tight',
+                            isSelected
+                              ? 'bg-primary-foreground text-primary border border-primary'
+                              : 'bg-muted text-foreground border'
+                          )}
                         >
-                          {sess.status}
-                        </Badge>
-                      </div>
-
-                      <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t">
-                        <span className="font-medium text-foreground">
-                          {sess._count?.items || 0} Assets Loaded
+                          {sess._count?.items}
                         </span>
-                        {sess._count?.discrepancies ? (
-                          <span className="text-amber-600 font-semibold text-[11px]">
-                            {sess._count.discrepancies} Discrepancies
-                          </span>
-                        ) : null}
-                      </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            /* Expanded Full Sidebar View */
+            <div className="space-y-3 bg-card border p-3 rounded-xl shadow-2xs">
+              <div className="flex items-center justify-between pb-2 border-b">
+                <div className="flex items-center gap-1.5">
+                  <Layers className="w-4 h-4 text-primary shrink-0" />
+                  <h2 className="font-bold text-sm tracking-tight text-foreground">
+                    Active Sessions ({plan.sessions.length})
+                  </h2>
+                </div>
 
-                      <div className="flex items-center justify-between gap-1.5 pt-1">
-                        <div>
-                          {sess.status === 'COMPLETED' ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleReopenSession(sess.id);
-                              }}
-                              className="h-8 gap-1 text-[11px] text-muted-foreground hover:text-primary"
-                              title="Reopen session for further scanning"
-                            >
-                              <RotateCcw className="w-3 h-3" />
-                              <span>Reopen</span>
-                            </Button>
-                          ) : (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleCompleteSession(sess.id);
-                              }}
-                              className="h-8 gap-1 text-[11px] text-emerald-700 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10"
-                              title="Mark session scan as completed"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>Mark Complete</span>
-                            </Button>
-                          )}
-                        </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsSessionModalOpen(true)}
+                    className="h-7 px-2 gap-1 text-xs"
+                    title="Start New Session"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>New</span>
+                  </Button>
 
-                        <div className="flex items-center gap-1.5">
-                          {sess.status === 'COMPLETED' ? (
-                            <Button
-                              size="sm"
-                              disabled
-                              variant="outline"
-                              className="h-8 gap-1.5 text-xs opacity-60 cursor-not-allowed bg-muted/30 text-muted-foreground"
-                              title="Session completed - Reopen to scan"
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setIsSessionsCollapsed(true)}
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground rounded-lg"
+                    title="Collapse Sessions Sidebar"
+                  >
+                    <PanelLeftClose className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {plan.sessions.length === 0 ? (
+                <Card className="border-dashed p-6 text-center space-y-2">
+                  <ClipboardCheck className="w-8 h-8 text-muted-foreground/60 mx-auto" />
+                  <p className="text-xs font-medium text-foreground">No Sessions Created Yet</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Start a session to generate the physical inventory checklist for mobile scanning.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={() => setIsSessionModalOpen(true)}
+                    className="gap-1.5 h-8 text-xs mt-2"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Start First Session</span>
+                  </Button>
+                </Card>
+              ) : (
+                <div className="space-y-2.5 max-h-[calc(100vh-280px)] overflow-y-auto pr-1">
+                  {plan.sessions.map((sess) => {
+                    const isSelected = sess.id === selectedSessionId;
+                    return (
+                      <Card
+                        key={sess.id}
+                        onClick={() => setSelectedSessionId(sess.id)}
+                        className={`cursor-pointer transition-all ${isSelected
+                          ? 'border-primary ring-1 ring-primary/40 bg-primary/5 shadow-xs'
+                          : 'hover:border-border hover:bg-muted/30'
+                          }`}
+                      >
+                        <CardContent className="p-3.5 space-y-2.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="space-y-0.5">
+                              <span className="font-semibold text-xs sm:text-sm text-foreground flex items-center gap-1.5">
+                                <Building className="w-3.5 h-3.5 text-primary" />
+                                <span>{sess.location?.name || 'All Scoped Locations'}</span>
+                              </span>
+                              <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+                                <User className="w-3 h-3" />
+                                <span>Auditor: {sess.auditor?.name || 'Assigned Staff'}</span>
+                              </span>
+                            </div>
+                            <Badge
+                              variant={
+                                sess.status === 'IN_PROGRESS'
+                                  ? 'warning'
+                                  : sess.status === 'SUBMITTED'
+                                    ? 'success'
+                                    : 'secondary'
+                              }
+                              className="text-[10px]"
                             >
-                              <Lock className="w-3.5 h-3.5" />
-                              <span>Completed</span>
-                            </Button>
-                          ) : (
-                            <Link href={`/scan?sessionId=${sess.id}&planId=${plan.id}`}>
-                              <Button size="sm" className="h-8 gap-1.5 text-xs shadow-2xs">
-                                <QrCode className="w-3.5 h-3.5" />
-                                <span>Scanner</span>
+                              {sess.status}
+                            </Badge>
+                          </div>
+
+                          <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t">
+                            <span className="font-medium text-foreground">
+                              {sess._count?.items || 0} Assets Loaded
+                            </span>
+                            {sess._count?.discrepancies ? (
+                              <span className="text-amber-600 font-semibold text-[11px]">
+                                {sess._count.discrepancies} Discrepancies
+                              </span>
+                            ) : null}
+                          </div>
+
+                          <div className="flex items-center justify-between gap-1.5 pt-1">
+                            <div>
+                              {sess.status === 'COMPLETED' ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleReopenSession(sess.id);
+                                  }}
+                                  className="h-8 gap-1 text-[11px] text-muted-foreground hover:text-primary"
+                                  title="Reopen session for further scanning"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>Reopen</span>
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCompleteSession(sess.id);
+                                  }}
+                                  className="h-8 gap-1 text-[11px] text-emerald-700 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10"
+                                  title="Mark session scan as completed"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>Mark Complete</span>
+                                </Button>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {sess.status === 'COMPLETED' ? (
+                                <Button
+                                  size="sm"
+                                  disabled
+                                  variant="outline"
+                                  className="h-8 gap-1.5 text-xs opacity-60 cursor-not-allowed bg-muted/30 text-muted-foreground"
+                                  title="Session completed - Reopen to scan"
+                                >
+                                  <Lock className="w-3.5 h-3.5" />
+                                  <span>Completed</span>
+                                </Button>
+                              ) : (
+                                <Link href={`/scan?sessionId=${sess.id}&planId=${plan.id}`}>
+                                  <Button size="sm" className="h-8 gap-1.5 text-xs shadow-2xs">
+                                    <QrCode className="w-3.5 h-3.5" />
+                                    <span>Scanner</span>
+                                  </Button>
+                                </Link>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteSession(sess.id);
+                                }}
+                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                title="Delete Session"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
                               </Button>
-                            </Link>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteSession(sess.id);
-                            }}
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            title="Delete Session"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </aside>
 
         {/* Right Column: Pre-Populated Checklist & Scan Status Table */}
-        <div className="lg:col-span-2 space-y-3">
+        <div className="flex-1 min-w-0 w-full space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
+              {isSessionsCollapsed && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsSessionsCollapsed(false)}
+                  className="h-7 px-2 text-xs gap-1 text-primary border-primary/30 hover:bg-primary/5 shadow-2xs"
+                  title="Expand Sessions Sidebar"
+                >
+                  <PanelLeftOpen className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline font-medium">Sessions</span>
+                </Button>
+              )}
               <h2 className="font-bold text-sm tracking-tight flex items-center gap-1.5">
                 <Boxes className="w-4 h-4 text-primary" />
                 <span>Session Inventory Checklist ({sessionItems.length})</span>
@@ -819,8 +1106,8 @@ export default function AuditPlanDetailPage() {
                     plan.sessions.find((s) => s.id === selectedSessionId)?.status === 'COMPLETED'
                       ? 'success'
                       : plan.sessions.find((s) => s.id === selectedSessionId)?.status === 'IN_PROGRESS'
-                      ? 'warning'
-                      : 'secondary'
+                        ? 'warning'
+                        : 'secondary'
                   }
                   className="text-[10px]"
                 >
@@ -831,6 +1118,21 @@ export default function AuditPlanDetailPage() {
 
             {selectedSessionId && (
               <div className="flex items-center gap-2">
+                {sessionItems.filter((i) => i.status === 'PENDING').length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleMarkSessionUnscannedMissing(selectedSessionId)}
+                    className="h-8 gap-1.5 text-xs text-amber-700 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/10 shadow-2xs font-semibold"
+                    title={`Mark ${sessionItems.filter((i) => i.status === 'PENDING').length} unscanned assets as MISSING`}
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                    <span>
+                      Mark {sessionItems.filter((i) => i.status === 'PENDING').length} Unscanned as MISSING
+                    </span>
+                  </Button>
+                )}
+
                 {plan.sessions.find((s) => s.id === selectedSessionId)?.status === 'COMPLETED' ? (
                   <Button
                     variant="outline"
@@ -875,6 +1177,24 @@ export default function AuditPlanDetailPage() {
               </div>
             )}
           </div>
+
+          {/* Location Transfer Success Banner */}
+          {transferSuccessBanner && (
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 rounded-lg text-xs flex items-center justify-between gap-2 shadow-2xs">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{transferSuccessBanner}</span>
+              </div>
+              <Link
+                href="/transfers"
+                target="_blank"
+                className="font-semibold underline shrink-0 hover:opacity-80 flex items-center gap-1"
+              >
+                <span>Open Transfers</span>
+                <ExternalLink className="w-3 h-3" />
+              </Link>
+            </div>
+          )}
 
           {/* Search & Quick Filter Subbar */}
           {selectedSessionId && sessionItems.length > 0 && (
@@ -953,13 +1273,13 @@ export default function AuditPlanDetailPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/40 text-[11px]">
-                      <TableHead className="w-[120px]">Asset Code</TableHead>
+                      <TableHead className="w-[135px] min-w-[125px]">Asset Code</TableHead>
                       <TableHead>Asset Name</TableHead>
-                      <TableHead className="w-[130px]">Expected Location</TableHead>
-                      <TableHead className="w-[140px]">Physical Location</TableHead>
-                      <TableHead className="w-[100px]">Audit Status</TableHead>
+                      <TableHead className="w-[120px]">Expected Location</TableHead>
+                      <TableHead className="w-[120px]">Physical Location</TableHead>
+                      <TableHead className="w-[90px]">Audit Status</TableHead>
                       <TableHead className="w-[90px]">Condition</TableHead>
-                      <TableHead className="w-[140px] text-right">Action</TableHead>
+                      <TableHead className="w-[110px] text-right">Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -987,7 +1307,7 @@ export default function AuditPlanDetailPage() {
                     ) : (
                       paginatedSessionItems.map((item) => (
                         <TableRow key={item.id} className="text-xs hover:bg-muted/30">
-                          <TableCell className="font-mono font-semibold text-primary">
+                          <TableCell className="font-mono font-semibold text-primary whitespace-nowrap">
                             {item.asset.assetCode}
                           </TableCell>
                           <TableCell>
@@ -1036,23 +1356,43 @@ export default function AuditPlanDetailPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1.5">
-                              {item.status === 'MISMATCH' && (
-                                <Link
-                                  href={`/transfers?code=${item.asset.assetCode}${
-                                    item.foundLocation ? `&toLocationId=${item.foundLocation.id}` : ''
-                                  }`}
-                                >
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-7 px-2 text-[11px] gap-1 border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 hover:text-amber-800"
-                                    title={`Initiate transfer for mismatched asset ${item.asset.assetCode}`}
-                                  >
-                                    <ArrowLeftRight className="w-3 h-3" />
-                                    <span>Transfer</span>
-                                  </Button>
-                                </Link>
-                              )}
+                              {/* Location Mismatch Transfer Action */}
+                              {(item.status === 'MISMATCH' ||
+                                item.status === 'LOCATION_MISMATCH' ||
+                                Boolean(
+                                  item.expectedLocation &&
+                                  item.foundLocation &&
+                                  item.expectedLocation.id !== item.foundLocation.id,
+                                )) && (
+                                  <>
+                                    {getPendingTransferForAsset(item.asset.id) ? (
+                                      <Link href={`/transfers?code=${item.asset.assetCode}`} target="_blank">
+                                        <Badge
+                                          variant="outline"
+                                          className="h-7 px-2.5 text-[10px] gap-1 border-blue-400 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 hover:bg-blue-100 cursor-pointer shadow-2xs font-medium"
+                                          title="Transfer request is pending approval in Transfers menu"
+                                        >
+                                          <CheckCircle2 className="w-3 h-3 text-blue-600 shrink-0" />
+                                          <span>Transfer Pending</span>
+                                          <ExternalLink className="w-2.5 h-2.5 opacity-70" />
+                                        </Badge>
+                                      </Link>
+                                    ) : (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleOpenTransferModal(item)}
+                                        className="h-7 px-2.5 text-[11px] gap-1.5 border-amber-400 text-amber-800 bg-amber-50 hover:bg-amber-100 hover:text-amber-900 shadow-2xs font-semibold dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-700"
+                                        title={`Generate transfer request from ${item.expectedLocation?.name || 'previous location'} to ${item.foundLocation?.name || 'current location'}`}
+                                      >
+                                        <ArrowLeftRight className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                                        <span>Transfer</span>
+                                      </Button>
+                                    )}
+                                  </>
+                                )}
+
+                              {/* Damage Repair Action */}
                               {(item.status === 'DAMAGED' || item.condition === 'DAMAGED' || item.condition === 'POOR') && (
                                 <Link href={`/maintenance?code=${item.asset.assetCode}`}>
                                   <Button
@@ -1066,29 +1406,46 @@ export default function AuditPlanDetailPage() {
                                   </Button>
                                 </Link>
                               )}
-                              {plan.sessions.find((s) => s.id === selectedSessionId)?.status === 'COMPLETED' ? (
+
+                              {/* Missing Discrepancy Manager Approval */}
+                              {item.status === 'MISSING' && item.discrepancy && (
+                                <>
+                                  {item.discrepancy.resolvedAt ? (
+                                    <Badge
+                                      variant="outline"
+                                      className="h-7 px-2 text-[10px] gap-1 border-rose-400 bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 shadow-2xs font-medium"
+                                      title="Manager write-off approval completed"
+                                    >
+                                      <CheckCircle2 className="w-3 h-3 text-rose-600 shrink-0" />
+                                      <span>Lost Approved</span>
+                                    </Badge>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleApproveMissingAsLost(item.discrepancy!.id, item.asset.assetCode)}
+                                      className="h-7 px-2 text-[11px] gap-1 border-rose-400 text-rose-800 bg-rose-50 hover:bg-rose-100 hover:text-rose-900 shadow-2xs font-semibold dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-700"
+                                      title={`Manager approval: write off asset ${item.asset.assetCode} and set status to LOST in master registry`}
+                                    >
+                                      <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400" />
+                                      <span>Approve as LOST</span>
+                                    </Button>
+                                  )}
+                                </>
+                              )}
+
+                              {/* Single Item Mark Missing Action */}
+                              {item.status === 'PENDING' && (
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  disabled
-                                  className="h-7 px-2 text-[11px] gap-1 opacity-50 cursor-not-allowed text-muted-foreground"
-                                  title="Session completed - Reopen to scan"
+                                  onClick={() => handleMarkSingleItemMissing(item.id, item.asset.assetCode)}
+                                  className="h-7 px-2 text-[11px] gap-1 border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 hover:text-amber-800"
+                                  title={`Mark asset ${item.asset.assetCode} as MISSING`}
                                 >
-                                  <Lock className="w-3 h-3" />
-                                  <span>Locked</span>
+                                  <AlertCircle className="w-3 h-3 text-amber-600" />
+                                  <span>Mark Missing</span>
                                 </Button>
-                              ) : (
-                                <Link href={`/scan?sessionId=${item.sessionId}&code=${item.asset.assetCode}`}>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-7 px-2 text-[11px] gap-1"
-                                    title="Scan this asset"
-                                  >
-                                    <QrCode className="w-3 h-3" />
-                                    <span>Scan</span>
-                                  </Button>
-                                </Link>
                               )}
                             </div>
                           </TableCell>
@@ -1168,9 +1525,8 @@ export default function AuditPlanDetailPage() {
                               key={p}
                               variant={safeChecklistPage === p ? 'default' : 'outline'}
                               size="sm"
-                              className={`h-7 min-w-7 px-2 text-xs font-semibold ${
-                                safeChecklistPage === p ? 'shadow-xs' : 'hover:bg-muted'
-                              }`}
+                              className={`h-7 min-w-7 px-2 text-xs font-semibold ${safeChecklistPage === p ? 'shadow-xs' : 'hover:bg-muted'
+                                }`}
                               onClick={() => handleChecklistPageChange(p)}
                             >
                               {p}
@@ -1344,6 +1700,137 @@ export default function AuditPlanDetailPage() {
                     <>
                       <Plus className="w-4 h-4" />
                       <span>Start Session</span>
+                    </>
+                  )}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Location Transfer Generation Modal */}
+      {transferModalItem && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-card w-full max-w-lg rounded-xl shadow-2xl border p-5 sm:p-6 space-y-4">
+            <div className="flex items-start justify-between gap-3 border-b pb-3">
+              <div className="space-y-0.5">
+                <h3 className="font-bold text-base flex items-center gap-2 text-foreground">
+                  <ArrowLeftRight className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                  <span>Generate Location Transfer</span>
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Relocate asset to verified physical station based on audit findings
+                </p>
+              </div>
+              <button
+                onClick={() => setTransferModalItem(null)}
+                className="p-1 rounded-md text-muted-foreground hover:bg-muted"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {transferFormError && (
+              <div className="p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{transferFormError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmTransfer} className="space-y-4 text-xs">
+              {/* Asset Details Box */}
+              <div className="p-3 bg-muted/40 border rounded-lg space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono font-bold text-sm text-foreground">
+                    {transferModalItem.asset.assetCode}
+                  </span>
+                  <Badge variant="outline" className="text-[10px] font-mono">
+                    {transferModalItem.asset.model || 'Equipment'}
+                  </Badge>
+                </div>
+                <div className="text-foreground font-medium text-xs">
+                  {transferModalItem.asset.name}
+                </div>
+              </div>
+
+              {/* Transfer Route: Previous Location -> Current Location */}
+              <div className="grid grid-cols-2 gap-3 p-3 bg-accent/30 border rounded-lg">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-semibold text-muted-foreground block">
+                    Previous Location (From)
+                  </span>
+                  <div className="font-medium text-foreground flex items-center gap-1.5">
+                    <Building className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <span className="truncate">
+                      {transferModalItem.expectedLocation?.name || 'Unassigned'}
+                    </span>
+                  </div>
+                  {transferModalItem.expectedLocation?.code && (
+                    <span className="text-[10px] font-mono text-muted-foreground block">
+                      Code: {transferModalItem.expectedLocation.code}
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-1 border-l pl-3 border-border">
+                  <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 block flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5" />
+                    <span>Current Location (To)</span>
+                  </span>
+                  <div className="font-bold text-foreground truncate">
+                    {transferModalItem.foundLocation?.name || 'Current Station'}
+                  </div>
+                  {transferModalItem.foundLocation?.code && (
+                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 block">
+                      Code: {transferModalItem.foundLocation.code}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Transfer Reason */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-foreground">
+                  Transfer Reason & Audit Notes
+                </label>
+                <textarea
+                  rows={3}
+                  className="w-full p-2.5 rounded-lg border bg-background text-xs resize-none"
+                  value={transferReason}
+                  onChange={(e) => setTransferReason(e.target.value)}
+                  placeholder="Reason for transfer..."
+                  required
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  A pending transfer request will be generated and routed for approval in the Transfers menu.
+                </p>
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2 border-t">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTransferModalItem(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={isGeneratingTransfer}
+                  className="gap-1.5 shadow-sm bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+                >
+                  {isGeneratingTransfer ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Transferring...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ArrowLeftRight className="w-4 h-4" />
+                      <span>Transfer</span>
                     </>
                   )}
                 </Button>

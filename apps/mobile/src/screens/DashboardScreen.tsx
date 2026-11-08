@@ -5,23 +5,16 @@ import {
   View,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
-  ActivityIndicator,
-  Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '../context/AuthContext';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import {
-  runFullSync,
   getSyncSummary,
-  flushPendingAudits,
-  flushAllOutbox,
-  triggerLiveSync,
   subscribeOutboxChanges,
   isOutboxSyncing,
-  SyncProgress,
 } from '../services/syncManager';
 import { theme } from '../config/theme';
 
@@ -38,15 +31,13 @@ export const DashboardScreen = () => {
     pendingPhotosCount: 0,
     totalOutboxCount: 0,
   });
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
-  const [isFlushingOutbox, setIsFlushingOutbox] = useState(false);
+  const [isSyncingLive, setIsSyncingLive] = useState(false);
 
   useEffect(() => {
     loadSummary();
     const unsubscribe = subscribeOutboxChanges(() => {
       loadSummary();
-      setIsFlushingOutbox(isOutboxSyncing());
+      setIsSyncingLive(isOutboxSyncing());
     });
     return () => unsubscribe();
   }, []);
@@ -54,6 +45,7 @@ export const DashboardScreen = () => {
   useFocusEffect(
     React.useCallback(() => {
       loadSummary();
+      setIsSyncingLive(isOutboxSyncing());
     }, [])
   );
 
@@ -61,70 +53,8 @@ export const DashboardScreen = () => {
     try {
       const summary = await getSyncSummary();
       setSyncSummary(summary);
-
-      // Auto-trigger initial sync if database is empty and online
-      if (summary.assetCount === 0 && !isOfflineMode && !isSyncing) {
-        console.log('[Dashboard] Database empty, auto-initiating first sync...');
-        handleSyncNow();
-      }
     } catch (e) {
       console.warn('[Dashboard] Error loading summary:', e);
-    }
-  };
-
-  const handleSyncNow = async () => {
-    setIsSyncing(true);
-    setSyncProgress({
-      phase: 'fetching_assets',
-      current: 0,
-      total: 0,
-      message: 'Connecting to server...',
-    });
-
-    try {
-      await runFullSync((p) => {
-        setSyncProgress(p);
-      });
-      const summary = await getSyncSummary();
-      setSyncSummary(summary);
-    } catch (error: any) {
-      console.warn('[Dashboard] Sync failed:', error);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const formattedSyncTime = syncSummary.lastSyncTime
-    ? new Date(syncSummary.lastSyncTime).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        day: '2-digit',
-        month: 'short',
-      })
-    : 'Never synced';
-
-  const handleFlushAudits = async () => {
-    if (isFlushingOutbox || isOutboxSyncing()) return;
-    if (syncSummary.totalOutboxCount === 0) {
-      Alert.alert('Outbox Clean', 'All offline scans and photos are fully synchronized live with the cloud.');
-      return;
-    }
-    setIsFlushingOutbox(true);
-    try {
-      const res = await triggerLiveSync({ force: true });
-      await loadSummary();
-      if (res.success && res.totalUploaded > 0) {
-        Alert.alert(
-          'Outbox Synchronized',
-          `Successfully uploaded live:\n• ${res.auditsUploaded} audit scans\n• ${res.photosUploaded} equipment photos\n\nCloud registry is up to date!`,
-        );
-      } else if (!res.success) {
-        Alert.alert('Connection Notice', 'Could not reach server. Outbox items are stored safely in SQLite and will upload automatically when online.');
-      }
-    } catch (e: any) {
-      Alert.alert('Upload Error', e?.message || 'Failed to upload outbox.');
-    } finally {
-      setIsFlushingOutbox(false);
     }
   };
 
@@ -155,17 +85,17 @@ export const DashboardScreen = () => {
     },
     {
       label: 'Pending Sync',
-      value: (isFlushingOutbox || isOutboxSyncing())
+      value: isSyncingLive
         ? 'Syncing Live...'
         : syncSummary.totalOutboxCount > 0
           ? `${syncSummary.totalOutboxCount} Outbox`
           : 'All Synced',
-      change: (isFlushingOutbox || isOutboxSyncing())
+      change: isSyncingLive
         ? 'Live uploading to cloud...'
         : syncSummary.totalOutboxCount > 0
           ? `${syncSummary.pendingAuditsCount} scans, ${syncSummary.pendingPhotosCount} photos`
-          : 'Live synced (Auto)',
-      iconText: (isFlushingOutbox || isOutboxSyncing()) ? '⚡' : syncSummary.totalOutboxCount > 0 ? '📤' : '☁️',
+          : 'Tap to view in Settings',
+      iconText: isSyncingLive ? '⚡' : syncSummary.totalOutboxCount > 0 ? '📤' : '☁️',
       bgColor:
         syncSummary.totalOutboxCount > 0
           ? theme.colors.warningLight
@@ -178,7 +108,7 @@ export const DashboardScreen = () => {
   ];
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {/* Top Navbar Header (matches WAP TopNavbar) */}
       <View style={styles.topNavbar}>
         <View style={styles.navBrand}>
@@ -220,7 +150,10 @@ export const DashboardScreen = () => {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        style={{ flex: 1, backgroundColor: theme.colors.background }}
+        contentContainerStyle={styles.scrollContent}
+      >
         {/* Welcome Section (matches WAP Dashboard) */}
         <View style={styles.welcomeSection}>
           <Text style={styles.pageTitle}>Operations Dashboard</Text>
@@ -230,23 +163,23 @@ export const DashboardScreen = () => {
         </View>
 
         {/* Database Empty Warning Banner */}
-        {syncSummary.assetCount === 0 && !isSyncing && (
+        {syncSummary.assetCount === 0 && (
           <View style={styles.emptyDbCard}>
             <View style={styles.emptyDbHeader}>
               <Text style={styles.emptyDbIcon}>⚠️</Text>
               <View style={styles.emptyDbTextCol}>
                 <Text style={styles.emptyDbTitle}>Offline Database Not Initialized</Text>
                 <Text style={styles.emptyDbSubtitle}>
-                  0 assets cached in local SQLite. Run sync to download 13,470+ equipment records for offline barcode scanning.
+                  0 assets cached in local SQLite. Open Settings to download full 13,470+ equipment catalog for offline scanning.
                 </Text>
               </View>
             </View>
             <TouchableOpacity
               style={styles.emptyDbButton}
-              onPress={handleSyncNow}
+              onPress={() => (navigation as any).navigate('MainTabs', { screen: 'Profile' })}
               activeOpacity={0.85}
             >
-              <Text style={styles.emptyDbButtonText}>🔄 Download 13k+ Asset Catalog Now</Text>
+              <Text style={styles.emptyDbButtonText}>⚙ Open Settings to Download Catalog</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -263,7 +196,7 @@ export const DashboardScreen = () => {
                 } else if (kpi.label === 'Factory Zones') {
                   navigation.navigate('LocationTree' as any);
                 } else if (kpi.label === 'Pending Sync') {
-                  handleFlushAudits();
+                  (navigation as any).navigate('MainTabs', { screen: 'Profile' });
                 }
               }}
               activeOpacity={0.8}
@@ -288,14 +221,14 @@ export const DashboardScreen = () => {
         <View style={styles.actionGrid}>
           <TouchableOpacity
             style={styles.actionTile}
-            onPress={() => navigation.navigate('Scan' as any)}
+            onPress={() => (navigation as any).navigate('MainTabs', { screen: 'Scan', params: { isScanMode: true } })}
             activeOpacity={0.85}
           >
             <View style={[styles.actionIconCircle, { backgroundColor: theme.colors.primaryLight }]}>
               <Text style={styles.actionIcon}>📷</Text>
             </View>
-            <Text style={styles.actionTileTitle}>Barcode Scan</Text>
-            <Text style={styles.actionTileSub}>Tag inspection</Text>
+            <Text style={styles.actionTileTitle}>Audit Scanner</Text>
+            <Text style={styles.actionTileSub}>Plan ➔ Station ➔ Scan</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -312,94 +245,14 @@ export const DashboardScreen = () => {
 
           <TouchableOpacity
             style={styles.actionTile}
-            onPress={handleSyncNow}
-            disabled={isSyncing}
+            onPress={() => navigation.navigate('LocationTree' as any)}
             activeOpacity={0.85}
           >
             <View style={[styles.actionIconCircle, { backgroundColor: theme.colors.purpleLight }]}>
-              {isSyncing ? (
-                <ActivityIndicator size="small" color={theme.colors.purple} />
-              ) : (
-                <Text style={styles.actionIcon}>🔄</Text>
-              )}
+              <Text style={styles.actionIcon}>🏢</Text>
             </View>
-            <Text style={styles.actionTileTitle}>Offline Sync</Text>
-            <Text style={styles.actionTileSub}>13k+ assets</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Database Status & Sync Card */}
-        <View style={styles.syncCard}>
-          <View style={styles.syncCardHeader}>
-            <View>
-              <Text style={styles.syncCardTitle}>Catalog Synchronization</Text>
-              <Text style={styles.syncCardSub}>
-                {syncSummary.assetCount.toLocaleString()} assets cached • Last synced: {formattedSyncTime}
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.syncBadge,
-                isOnline ? styles.syncBadgeOnline : styles.syncBadgeOffline,
-              ]}
-            >
-              <View
-                style={[
-                  styles.syncDot,
-                  isOnline ? styles.syncDotOnline : styles.syncDotOffline,
-                ]}
-              />
-              <Text
-                style={[
-                  styles.syncBadgeText,
-                  isOnline ? styles.syncBadgeTextOnline : styles.syncBadgeTextOffline,
-                ]}
-              >
-                {isOnline ? 'Online' : 'Offline'}
-              </Text>
-            </View>
-          </View>
-
-          {/* Sync Progress Bar */}
-          {isSyncing && syncProgress && (
-            <View style={styles.progressContainer}>
-              <View style={styles.progressRow}>
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-                <Text style={styles.progressMessage} numberOfLines={1}>
-                  {syncProgress.message}
-                </Text>
-              </View>
-              {syncProgress.total > 0 && (
-                <View style={styles.progressBarTrack}>
-                  <View
-                    style={[
-                      styles.progressBarFill,
-                      {
-                        width: `${Math.min(
-                          100,
-                          Math.round((syncProgress.current / syncProgress.total) * 100),
-                        )}%`,
-                      },
-                    ]}
-                  />
-                </View>
-              )}
-            </View>
-          )}
-
-          <TouchableOpacity
-            style={[styles.syncButton, isSyncing && styles.buttonDisabled]}
-            onPress={handleSyncNow}
-            disabled={isSyncing}
-            activeOpacity={0.85}
-          >
-            {isSyncing ? (
-              <ActivityIndicator color="#ffffff" />
-            ) : (
-              <Text style={styles.syncButtonText}>
-                {syncSummary.assetCount > 0 ? 'Sync 13k+ Catalog Now' : 'Initial 13k+ Offline Sync'}
-              </Text>
-            )}
+            <Text style={styles.actionTileTitle}>Factory Zones</Text>
+            <Text style={styles.actionTileSub}>Location tree</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -410,7 +263,7 @@ export const DashboardScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: '#ffffff',
   },
   topNavbar: {
     flexDirection: 'row',
@@ -608,86 +461,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: theme.colors.textMuted,
     marginTop: 1,
-  },
-  syncCard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.cardBorder,
-    padding: 14,
-    ...theme.shadows.sm,
-  },
-  syncCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  syncCardTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: theme.colors.textPrimary,
-  },
-  syncCardSub: {
-    fontSize: 11,
-    color: theme.colors.textMuted,
-    marginTop: 2,
-  },
-  walBadge: {
-    backgroundColor: theme.colors.purpleLight,
-    borderWidth: 1,
-    borderColor: theme.colors.purpleBorder,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  walBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: theme.colors.purple,
-  },
-  progressContainer: {
-    backgroundColor: theme.colors.background,
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: theme.colors.cardBorder,
-  },
-  progressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-  },
-  progressMessage: {
-    fontSize: 11,
-    color: theme.colors.textSecondary,
-    flex: 1,
-  },
-  progressBarTrack: {
-    height: 4,
-    backgroundColor: theme.colors.cardBorder,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: theme.colors.primary,
-  },
-  syncButton: {
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.md,
-    paddingVertical: 11,
-    alignItems: 'center',
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  syncButtonText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '600',
   },
   emptyDbCard: {
     backgroundColor: '#fffbeb',

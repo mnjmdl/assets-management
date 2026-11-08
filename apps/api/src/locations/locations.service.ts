@@ -129,8 +129,46 @@ export class LocationsService {
       this.prisma.location.count({ where }),
     ]);
 
+    // Calculate rolled-up total asset counts including all descendant children
+    const allLocationsForCounts = await this.prisma.location.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        parentId: true,
+        _count: { select: { assets: true } },
+      },
+    });
+
+    const parentMap = new Map<string, string | null>();
+    const countMap = new Map<string, number>();
+    for (const l of allLocationsForCounts) {
+      parentMap.set(l.id, l.parentId);
+      countMap.set(l.id, l._count?.assets ?? 0);
+    }
+
+    const rolledUpCounts = new Map<string, number>();
+    for (const l of allLocationsForCounts) {
+      const own = countMap.get(l.id) || 0;
+      if (own === 0) continue;
+      let cur: string | null | undefined = l.id;
+      while (cur) {
+        rolledUpCounts.set(cur, (rolledUpCounts.get(cur) || 0) + own);
+        cur = parentMap.get(cur);
+      }
+    }
+
+    const formattedData = data.map((loc) => {
+      const rolledTotal = rolledUpCounts.get(loc.id) || loc._count?.assets || 0;
+      return {
+        ...loc,
+        assetCount: rolledTotal,
+        totalAssetCount: rolledTotal,
+        directAssetCount: loc._count?.assets ?? 0,
+      };
+    });
+
     return {
-      data,
+      data: formattedData,
       meta: {
         total,
         page,
@@ -160,6 +198,7 @@ export class LocationsService {
     allLocations.forEach((loc) => {
       locationMap.set(loc.id, {
         ...loc,
+        directAssetCount: loc._count?.assets ?? 0,
         assetCount: loc._count?.assets ?? 0,
         children: [],
       });
@@ -176,13 +215,14 @@ export class LocationsService {
 
     // Roll up child asset counts into parents
     const rollupAssets = (node: any): number => {
-      let count = node.assetCount || 0;
+      let count = node.directAssetCount ?? node._count?.assets ?? 0;
       if (node.children && node.children.length > 0) {
         for (const child of node.children) {
           count += rollupAssets(child);
         }
       }
       node.totalAssetCount = count;
+      node.assetCount = count;
       return count;
     };
 
@@ -242,8 +282,34 @@ export class LocationsService {
       current = current.parent;
     }
 
+    // Roll up assets quantity including all descendant children
+    const allLocations = await this.prisma.location.findMany({
+      where: { isActive: true },
+      select: { id: true, parentId: true },
+    });
+    const descendantIds = new Set<string>([id]);
+    let added = true;
+    while (added) {
+      added = false;
+      for (const l of allLocations) {
+        if (l.parentId && descendantIds.has(l.parentId) && !descendantIds.has(l.id)) {
+          descendantIds.add(l.id);
+          added = true;
+        }
+      }
+    }
+    const totalAssetCount = await this.prisma.asset.count({
+      where: {
+        isActive: true,
+        locationId: { in: Array.from(descendantIds) },
+      },
+    });
+
     return {
       ...location,
+      assetCount: totalAssetCount,
+      totalAssetCount,
+      directAssetCount: location._count?.assets ?? 0,
       breadcrumbs,
       fullPath: breadcrumbs.map((b) => b.name).join(' > '),
     };
@@ -251,11 +317,18 @@ export class LocationsService {
 
   // ── Find by Code or QR Tag ──────────────────────────────────────────────────
   async findByCode(code: string) {
+    const raw = code.trim();
+    const cleanCode = raw.replace(/^LOC:/i, '').trim();
+
     const location = await this.prisma.location.findFirst({
       where: {
         OR: [
-          { code: code.toUpperCase() },
-          { id: code },
+          { code: cleanCode.toUpperCase() },
+          { code: raw.toUpperCase() },
+          { qrCode: raw },
+          { qrCode: `LOC:${cleanCode.toUpperCase()}` },
+          { id: raw },
+          { id: cleanCode },
         ],
       },
     });

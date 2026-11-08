@@ -197,6 +197,31 @@ export async function getDatabase(): Promise<SQLiteDatabase> {
     await db.execAsync('CREATE INDEX IF NOT EXISTS idx_offline_audits_session ON offline_audits(sessionId);');
   } catch (_) {}
 
+  // Auto-purge any stale synced items whose sessions no longer exist in SQLite
+  try {
+    await db.execAsync(
+      `DELETE FROM session_audit_items 
+       WHERE sessionId NOT IN (SELECT id FROM audit_sessions) AND synced = 1;`,
+    );
+  } catch (_) {}
+
+  // Deduplicate session_audit_items so only 1 row exists per (sessionId, assetId)
+  try {
+    await db.execAsync(`
+      DELETE FROM session_audit_items 
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid) 
+        FROM session_audit_items 
+        GROUP BY sessionId, assetId
+      );
+    `);
+    await db.execAsync(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_session_items_sess_asset ON session_audit_items(sessionId, assetId);',
+    );
+  } catch (dedupErr) {
+    console.warn('[db] Note on deduplicating session items:', dedupErr);
+  }
+
   dbInstance = db;
   return db;
 }
@@ -301,9 +326,10 @@ export async function getCachedAssetsPaginated(options: {
       sapAssetCode LIKE ? OR
       name LIKE ? OR
       model LIKE ? OR
-      serialNumber LIKE ?
+      serialNumber LIKE ? OR
+      locationName LIKE ?
     )`);
-    params.push(pattern, pattern, pattern, pattern, pattern);
+    params.push(pattern, pattern, pattern, pattern, pattern, pattern);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -337,18 +363,78 @@ export async function getAllCachedLocations(): Promise<CachedLocation[]> {
   );
 }
 
-export async function getLocationAssetCounts(): Promise<Record<string, number>> {
+export async function findCachedLocation(codeOrTag: string): Promise<CachedLocation | null> {
+  if (!codeOrTag) return null;
   const db = await getDatabase();
-  const rows = await db.getAllAsync<{ locationId: string; count: number }>(
+  const raw = codeOrTag.trim();
+  const clean = raw.replace(/^LOC:/i, '').trim();
+
+  const query = `
+    SELECT * FROM locations
+    WHERE UPPER(code) = UPPER(?)
+       OR UPPER(code) = UPPER(?)
+       OR UPPER(name) = UPPER(?)
+       OR UPPER(name) = UPPER(?)
+       OR id = ?
+       OR id = ?
+    LIMIT 1;
+  `;
+  const result = await db.getFirstAsync<CachedLocation>(query, [
+    clean,
+    raw,
+    clean,
+    raw,
+    raw,
+    clean,
+  ]);
+  return result || null;
+}
+
+export async function getLocationDirectAssetCounts(): Promise<Record<string, number>> {
+  const db = await getDatabase();
+  const assetRows = await db.getAllAsync<{ locationId: string; count: number }>(
     'SELECT locationId, COUNT(*) as count FROM assets WHERE locationId IS NOT NULL GROUP BY locationId;',
   );
-  const map: Record<string, number> = {};
-  for (const row of rows) {
+  const directMap: Record<string, number> = {};
+  for (const row of assetRows) {
     if (row.locationId) {
-      map[row.locationId] = row.count;
+      directMap[row.locationId] = Number(row.count) || 0;
     }
   }
-  return map;
+  return directMap;
+}
+
+export async function getLocationAssetCounts(): Promise<Record<string, number>> {
+  const db = await getDatabase();
+  const [assetRows, locationRows] = await Promise.all([
+    db.getAllAsync<{ locationId: string; count: number }>(
+      'SELECT locationId, COUNT(*) as count FROM assets WHERE locationId IS NOT NULL GROUP BY locationId;',
+    ),
+    db.getAllAsync<{ id: string; parentId: string | null }>(
+      'SELECT id, parentId FROM locations;',
+    ),
+  ]);
+
+  const parentMap = new Map<string, string | null>();
+  for (const loc of locationRows) {
+    parentMap.set(loc.id, loc.parentId || null);
+  }
+
+  // Bubble up each location's asset count to all parent, grandparent, and root ancestor locations
+  const rolledUpMap: Record<string, number> = {};
+  for (const row of assetRows) {
+    if (!row.locationId) continue;
+    const count = Number(row.count) || 0;
+    if (count === 0) continue;
+
+    let curId: string | null | undefined = row.locationId;
+    while (curId) {
+      rolledUpMap[curId] = (rolledUpMap[curId] || 0) + count;
+      curId = parentMap.get(curId);
+    }
+  }
+
+  return rolledUpMap;
 }
 
 export async function getSyncMeta(key: string): Promise<string | null> {
@@ -597,6 +683,46 @@ export async function saveCachedSessions(sessions: any[]): Promise<void> {
   }
 }
 
+/**
+ * Prune sessions and checklist items that no longer exist on the server for a plan.
+ * Preserves local items that have pending offline changes (synced = 0).
+ */
+export async function pruneOrphanedSessions(
+  planId: string,
+  validSessionIds: string[],
+): Promise<void> {
+  if (!planId) return;
+  try {
+    const db = await getDatabase();
+    if (validSessionIds && validSessionIds.length > 0) {
+      const placeholders = validSessionIds.map(() => '?').join(',');
+      // Delete any cached session in this plan that is NOT in the server's active sessions list
+      await db.runAsync(
+        `DELETE FROM audit_sessions WHERE planId = ? AND id NOT IN (${placeholders});`,
+        [planId, ...validSessionIds],
+      );
+      // Delete any items belonging to sessions that no longer exist, unless they have unsynced local offline work
+      await db.runAsync(
+        `DELETE FROM session_audit_items 
+         WHERE sessionId NOT IN (SELECT id FROM audit_sessions) AND synced = 1;`,
+      );
+    } else {
+      // If plan has 0 sessions on server, remove all synced sessions for this plan
+      await db.runAsync(
+        `DELETE FROM session_audit_items 
+         WHERE sessionId IN (SELECT id FROM audit_sessions WHERE planId = ?) AND synced = 1;`,
+        [planId],
+      );
+      await db.runAsync(
+        `DELETE FROM audit_sessions WHERE planId = ?;`,
+        [planId],
+      );
+    }
+  } catch (err) {
+    console.warn('[db] Error in pruneOrphanedSessions:', err);
+  }
+}
+
 export async function getAllCachedSessions(): Promise<any[]> {
   try {
     const db = await getDatabase();
@@ -728,7 +854,8 @@ export async function saveCachedSessionItems(sessionId: string, items: any[]): P
            foundLocationId, foundLocationName, foundLocationCode,
            scannedAt, synced, updatedAt
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-         ON CONFLICT(id) DO UPDATE SET
+         ON CONFLICT(sessionId, assetId) DO UPDATE SET
+           id = excluded.id,
            status = excluded.status,
            condition = excluded.condition,
            notes = excluded.notes,
@@ -781,7 +908,14 @@ export async function getSessionAuditItems(sessionId: string): Promise<any[]> {
       [sessionId],
     );
 
-    return rows.map((row) => ({
+    const seen = new Set<string>();
+    const uniqueRows = rows.filter((r) => {
+      if (seen.has(r.assetId)) return false;
+      seen.add(r.assetId);
+      return true;
+    });
+
+    return uniqueRows.map((row) => ({
       id: row.id,
       sessionId: row.sessionId,
       assetId: row.assetId,
@@ -844,7 +978,7 @@ export async function recordSessionItemScan(
     locationCode?: string;
     planId?: string;
   },
-): Promise<{ success: boolean; item?: any; message: string }> {
+): Promise<{ success: boolean; isDuplicate?: boolean; item?: any; message: string }> {
   if (!sessionId || !assetCodeOrId) {
     return { success: false, message: 'Invalid session or asset code' };
   }
@@ -854,6 +988,65 @@ export async function recordSessionItemScan(
     const asset = await findCachedAsset(assetCodeOrId);
     if (!asset) {
       return { success: false, message: `Asset "${assetCodeOrId}" not found in local catalog` };
+    }
+
+    // 1. Check if this item has ALREADY been scanned in the current session
+    const existing = await db.getFirstAsync<{ id: string; status: string; scannedAt: string | null }>(
+      'SELECT id, status, scannedAt FROM session_audit_items WHERE sessionId = ? AND assetId = ? LIMIT 1;',
+      [sessionId, asset.id],
+    );
+
+    if (existing && existing.status !== 'PENDING' && existing.scannedAt) {
+      return {
+        success: false,
+        isDuplicate: true,
+        item: {
+          ...asset,
+          status: existing.status,
+          scannedAt: existing.scannedAt,
+        },
+        message: `DUPLICATE SCAN: Asset "${asset.assetCode}" (${asset.name}) has ALREADY been audited in this session at ${new Date(existing.scannedAt).toLocaleTimeString()}.\n\nDuplicate scans are rejected and NOT saved.`,
+      };
+    }
+
+    // 2. Check if this item has already been audited in any other session within the same audit plan
+    if (scanData.planId) {
+      const existingInPlan = await db.getFirstAsync<{
+        id: string;
+        sessionId: string;
+        foundLocationName: string | null;
+        sessionLocationName: string | null;
+        scannedAt: string | null;
+      }>(
+        `SELECT sai.id, sai.sessionId, sai.foundLocationName, s.locationName as sessionLocationName, sai.scannedAt 
+         FROM session_audit_items sai
+         JOIN audit_sessions s ON s.id = sai.sessionId
+         WHERE s.planId = ? 
+           AND s.status != 'CANCELLED'
+           AND sai.assetId = ? 
+           AND sai.sessionId != ? 
+           AND sai.scannedAt IS NOT NULL 
+           AND sai.status != 'PENDING'
+         LIMIT 1;`,
+        [scanData.planId, asset.id, sessionId],
+      );
+
+      if (existingInPlan) {
+        const stationName =
+          existingInPlan.foundLocationName ||
+          existingInPlan.sessionLocationName ||
+          'another station';
+        return {
+          success: false,
+          isDuplicate: true,
+          item: {
+            ...asset,
+            scannedAt: existingInPlan.scannedAt,
+            locationName: stationName,
+          },
+          message: `DUPLICATE SCAN: Asset "${asset.assetCode}" (${asset.name}) was ALREADY scanned in this audit plan at station "${stationName}".\n\nDuplicate scans are rejected and NOT saved.`,
+        };
+      }
     }
 
     const now = new Date().toISOString();
@@ -869,12 +1062,6 @@ export async function recordSessionItemScan(
     } else if (isMismatch) {
       finalStatus = 'LOCATION_MISMATCH';
     }
-
-    // Check if this item is already tracked in session_audit_items
-    const existing = await db.getFirstAsync<{ id: string; status: string }>(
-      'SELECT id, status FROM session_audit_items WHERE sessionId = ? AND assetId = ? LIMIT 1;',
-      [sessionId, asset.id],
-    );
 
     const itemId =
       existing?.id || `local_item_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -916,7 +1103,17 @@ export async function recordSessionItemScan(
            expectedLocationId, expectedLocationName, expectedLocationCode,
            foundLocationId, foundLocationName, foundLocationCode,
            scannedAt, synced, updatedAt
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?);`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+         ON CONFLICT(sessionId, assetId) DO UPDATE SET
+           status = excluded.status,
+           condition = excluded.condition,
+           notes = excluded.notes,
+           foundLocationId = excluded.foundLocationId,
+           foundLocationName = excluded.foundLocationName,
+           foundLocationCode = excluded.foundLocationCode,
+           scannedAt = excluded.scannedAt,
+           synced = 0,
+           updatedAt = excluded.updatedAt;`,
         [
           itemId,
           sessionId,
@@ -1001,5 +1198,66 @@ export async function markSessionItemSynced(
     console.warn('[db] Error in markSessionItemSynced:', err);
   }
 }
+
+export async function updateLocalItemAfterTransferFinalized(
+  sessionId: string,
+  assetId: string,
+  newLocationId?: string,
+  newLocationName?: string,
+): Promise<void> {
+  if (!sessionId || !assetId) return;
+  try {
+    const db = await getDatabase();
+    await db.runAsync(
+      `UPDATE session_audit_items 
+       SET status = CASE WHEN condition = 'DAMAGED' THEN 'DAMAGED' ELSE 'VERIFIED' END,
+           expectedLocationId = COALESCE(?, foundLocationId, expectedLocationId),
+           expectedLocationName = COALESCE(?, foundLocationName, expectedLocationName),
+           updatedAt = ?
+       WHERE sessionId = ? AND assetId = ?;`,
+      [newLocationId || null, newLocationName || null, new Date().toISOString(), sessionId, assetId],
+    );
+  } catch (err) {
+    console.warn('[db] Error in updateLocalItemAfterTransferFinalized:', err);
+  }
+}
+
+export async function updateLocalItemStatus(
+  sessionId: string,
+  itemIdOrAssetId: string,
+  newStatus: string,
+): Promise<void> {
+  if (!sessionId || !itemIdOrAssetId) return;
+  try {
+    const db = await getDatabase();
+    await db.runAsync(
+      `UPDATE session_audit_items
+       SET status = ?, updatedAt = ?
+       WHERE sessionId = ? AND (id = ? OR assetId = ?);`,
+      [newStatus, new Date().toISOString(), sessionId, itemIdOrAssetId, itemIdOrAssetId],
+    );
+  } catch (err) {
+    console.warn('[db] Error in updateLocalItemStatus:', err);
+  }
+}
+
+export async function markLocalSessionUnscannedAsMissing(
+  sessionId: string,
+): Promise<void> {
+  if (!sessionId) return;
+  try {
+    const db = await getDatabase();
+    await db.runAsync(
+      `UPDATE session_audit_items
+       SET status = 'MISSING', updatedAt = ?
+       WHERE sessionId = ? AND status = 'PENDING';`,
+      [new Date().toISOString(), sessionId],
+    );
+  } catch (err) {
+    console.warn('[db] Error in markLocalSessionUnscannedAsMissing:', err);
+  }
+}
+
+
 
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import useSWR from 'swr';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -98,14 +99,7 @@ export default function AuditReportsPage() {
   const searchParams = useSearchParams();
   const initialPlanId = searchParams?.get('planId') || '';
 
-  const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Data from API
-  const [summary, setSummary] = useState<AuditReportSummary | null>(null);
-  const [items, setItems] = useState<AuditReportItem[]>([]);
-  const [plans, setPlans] = useState<PlanOption[]>([]);
 
   // Filter States
   const [selectedPlanId, setSelectedPlanId] = useState<string>(initialPlanId);
@@ -117,38 +111,30 @@ export default function AuditReportsPage() {
   const [page, setPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(15);
 
-  const fetchReport = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      if (selectedPlanId) params.append('planId', selectedPlanId);
-      if (statusFilter !== 'ALL') params.append('status', statusFilter);
-
-      const url = `/api/reports/audits${params.toString() ? `?${params.toString()}` : ''}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Failed to load audit report (${res.status})`);
-      }
-
-      const json = await res.json();
-      const payload = json?.data !== undefined ? json.data : json;
-
-      setSummary(payload.summary || null);
-      setItems(Array.isArray(payload.items) ? payload.items : []);
-      setPlans(Array.isArray(payload.plans) ? payload.plans : []);
-    } catch (err: any) {
-      console.error('Error fetching audit report:', err);
-      setError(err.message || 'Could not load audit report data.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchReport();
-    setPage(1);
+  const reportQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    if (selectedPlanId) params.append('planId', selectedPlanId);
+    if (statusFilter !== 'ALL') params.append('status', statusFilter);
+    return params.toString();
   }, [selectedPlanId, statusFilter]);
+
+  const {
+    data: rawReport,
+    error: reportError,
+    isLoading: reportLoading,
+    mutate: mutateReport,
+  } = useSWR(`/api/reports/audits${reportQuery ? `?${reportQuery}` : ''}`);
+
+  const payload = rawReport?.data !== undefined ? rawReport.data : rawReport || {};
+  const summary: AuditReportSummary | null = payload.summary || null;
+  const items: AuditReportItem[] = Array.isArray(payload.items) ? payload.items : [];
+  const plans: PlanOption[] = Array.isArray(payload.plans) ? payload.plans : [];
+  const loading = reportLoading && !rawReport;
+  const error = reportError ? reportError.message || 'Could not load audit report data.' : null;
+
+  const fetchReport = async () => {
+    await mutateReport();
+  };
 
   // Export Excel
   const handleExportExcel = async () => {
@@ -247,6 +233,7 @@ export default function AuditReportsPage() {
             <span>VERIFIED</span>
           </Badge>
         );
+      case 'LOCATION_MISMATCH':
       case 'MISMATCH':
         return (
           <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 text-[11px] gap-1">
@@ -340,188 +327,12 @@ export default function AuditReportsPage() {
       </div>
 
       {/* ─────────────────────────────────────────────────────────────
-          EXECUTIVE KPI METRIC CARDS
-         ───────────────────────────────────────────────────────────── */}
-      {summary && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {/* Station Compliance Rate */}
-          <Card className="border bg-card shadow-2xs col-span-2 sm:col-span-1 lg:col-span-1">
-            <CardContent className="p-3.5 space-y-1 text-center">
-              <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
-                Compliance Rate
-              </span>
-              <div className="flex items-center justify-center gap-1.5">
-                <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                <span className="text-2xl font-extrabold text-foreground tracking-tight">
-                  {summary.complianceRate}%
-                </span>
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                {summary.verifiedCount} of {summary.totalItems} verified
-              </p>
-            </CardContent>
-          </Card>
-
-          {/* Verified Items */}
-          <Card className="border bg-card shadow-2xs">
-            <CardContent className="p-3.5 space-y-1 text-center">
-              <span className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400 tracking-wider block">
-                Station Verified
-              </span>
-              <span className="text-2xl font-extrabold text-emerald-700 dark:text-emerald-400">
-                {summary.verifiedCount}
-              </span>
-              <p className="text-[10px] text-muted-foreground">Expected station match</p>
-            </CardContent>
-          </Card>
-
-          {/* Location Mismatches (Relocated) */}
-          <Card className="border bg-card shadow-2xs">
-            <CardContent className="p-3.5 space-y-1 text-center">
-              <span className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400 tracking-wider block">
-                Relocated (Mismatch)
-              </span>
-              <span className="text-2xl font-extrabold text-amber-600 dark:text-amber-400">
-                {summary.mismatchCount}
-              </span>
-              <p className="text-[10px] text-muted-foreground">Moved to different station</p>
-            </CardContent>
-          </Card>
-
-          {/* Damaged Equipment */}
-          <Card className="border bg-card shadow-2xs">
-            <CardContent className="p-3.5 space-y-1 text-center">
-              <span className="text-[10px] uppercase font-bold text-rose-600 dark:text-rose-400 tracking-wider block">
-                Damaged / Defect
-              </span>
-              <span className="text-2xl font-extrabold text-rose-600 dark:text-rose-400">
-                {summary.damagedCount}
-              </span>
-              <p className="text-[10px] text-muted-foreground">Reported wear/damage</p>
-            </CardContent>
-          </Card>
-
-          {/* Missing Equipment */}
-          <Card className="border bg-card shadow-2xs">
-            <CardContent className="p-3.5 space-y-1 text-center">
-              <span className="text-[10px] uppercase font-bold text-purple-600 dark:text-purple-400 tracking-wider block">
-                Missing Assets
-              </span>
-              <span className="text-2xl font-extrabold text-purple-600 dark:text-purple-400">
-                {summary.missingCount}
-              </span>
-              <p className="text-[10px] text-muted-foreground">Unaccounted tags</p>
-            </CardContent>
-          </Card>
-
-          {/* Pending Floor Scan */}
-          <Card className="border bg-card shadow-2xs col-span-2 sm:col-span-1 lg:col-span-1">
-            <CardContent className="p-3.5 space-y-1 text-center">
-              <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
-                Pending Scan
-              </span>
-              <span className="text-2xl font-extrabold text-muted-foreground">
-                {summary.pendingCount}
-              </span>
-              <p className="text-[10px] text-muted-foreground">Awaiting physical audit</p>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* ─────────────────────────────────────────────────────────────
-          STATUS RATIO VISUAL PROGRESS BARS
-         ───────────────────────────────────────────────────────────── */}
-      {summary && summary.totalItems > 0 && (
-        <Card className="border bg-card shadow-2xs overflow-hidden">
-          <CardContent className="p-4 space-y-3">
-            <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground">
-              <span className="flex items-center gap-1.5 text-foreground font-bold">
-                <TrendingUp className="w-4 h-4 text-primary" />
-                <span>Audit Reconciliation Breakdown</span>
-              </span>
-              <span>Total in Scope: {summary.totalItems} Items</span>
-            </div>
-
-            {/* Stacked Percentage Progress Bar */}
-            <div className="h-4 w-full rounded-full bg-muted overflow-hidden flex shadow-inner">
-              {summary.verifiedCount > 0 && (
-                <div
-                  style={{ width: `${(summary.verifiedCount / summary.totalItems) * 100}%` }}
-                  className="bg-emerald-500 h-full transition-all"
-                  title={`Verified: ${summary.verifiedCount}`}
-                />
-              )}
-              {summary.mismatchCount > 0 && (
-                <div
-                  style={{ width: `${(summary.mismatchCount / summary.totalItems) * 100}%` }}
-                  className="bg-amber-500 h-full transition-all"
-                  title={`Relocated / Mismatch: ${summary.mismatchCount}`}
-                />
-              )}
-              {summary.damagedCount > 0 && (
-                <div
-                  style={{ width: `${(summary.damagedCount / summary.totalItems) * 100}%` }}
-                  className="bg-rose-500 h-full transition-all"
-                  title={`Damaged: ${summary.damagedCount}`}
-                />
-              )}
-              {summary.missingCount > 0 && (
-                <div
-                  style={{ width: `${(summary.missingCount / summary.totalItems) * 100}%` }}
-                  className="bg-purple-500 h-full transition-all"
-                  title={`Missing: ${summary.missingCount}`}
-                />
-              )}
-              {summary.pendingCount > 0 && (
-                <div
-                  style={{ width: `${(summary.pendingCount / summary.totalItems) * 100}%` }}
-                  className="bg-muted-foreground/30 h-full transition-all"
-                  title={`Pending: ${summary.pendingCount}`}
-                />
-              )}
-            </div>
-
-            {/* Legend */}
-            <div className="flex flex-wrap items-center justify-between gap-3 text-xs pt-1">
-              <div className="flex flex-wrap items-center gap-4 text-[11px]">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
-                  <span>Verified ({summary.verifiedCount})</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
-                  <span>Relocated ({summary.mismatchCount})</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shrink-0" />
-                  <span>Damaged ({summary.damagedCount})</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-purple-500 shrink-0" />
-                  <span>Missing ({summary.missingCount})</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-muted-foreground/40 shrink-0" />
-                  <span>Pending ({summary.pendingCount})</span>
-                </span>
-              </div>
-
-              <div className="text-[11px] text-muted-foreground font-medium">
-                Physical Condition: {summary.conditionGoodCount} Good • {summary.conditionFairCount} Fair • {summary.conditionDamagedCount} Damaged
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ─────────────────────────────────────────────────────────────
-          FILTER CONTROLS & SEARCH BAR
+          FILTER CONTROLS & SEARCH BAR (TOP OF REPORT)
          ───────────────────────────────────────────────────────────── */}
       <Card className="border bg-card shadow-2xs">
         <CardContent className="p-3.5 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            {/* Plan Picker */}
+            {/* Scope / Plan Picker */}
             <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[240px]">
               <span className="text-xs font-bold text-muted-foreground flex items-center gap-1 shrink-0">
                 <ClipboardCheck className="w-4 h-4 text-primary" />
@@ -616,6 +427,198 @@ export default function AuditReportsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* ─────────────────────────────────────────────────────────────
+          EXECUTIVE KPI METRIC CARDS
+         ───────────────────────────────────────────────────────────── */}
+      {summary && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+          {/* Station Compliance Rate */}
+          <Card className="border bg-card shadow-2xs col-span-2 sm:col-span-1 lg:col-span-1">
+            <CardContent className="p-3.5 space-y-1 text-center">
+              <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
+                Compliance Rate
+              </span>
+              <div className="flex items-center justify-center gap-1.5">
+                <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                <span className="text-2xl font-extrabold text-foreground tracking-tight">
+                  {summary.complianceRate}%
+                </span>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                {summary.verifiedCount} of {summary.totalItems} verified
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Verified Items */}
+          <Card className="border bg-card shadow-2xs">
+            <CardContent className="p-3.5 space-y-1 text-center">
+              <span className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400 tracking-wider block">
+                Station Verified
+              </span>
+              <span className="text-2xl font-extrabold text-emerald-700 dark:text-emerald-400">
+                {summary.verifiedCount}
+              </span>
+              <p className="text-[10px] text-muted-foreground">Expected station match</p>
+            </CardContent>
+          </Card>
+
+          {/* Location Mismatches (Relocated) */}
+          <Card className="border bg-card shadow-2xs">
+            <CardContent className="p-3.5 space-y-1 text-center">
+              <span className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400 tracking-wider block">
+                Relocated (Mismatch)
+              </span>
+              <span className="text-2xl font-extrabold text-amber-600 dark:text-amber-400">
+                {summary.mismatchCount}
+              </span>
+              <p className="text-[10px] text-muted-foreground">Moved to different station</p>
+            </CardContent>
+          </Card>
+
+          {/* Damaged Equipment */}
+          <Card className="border bg-card shadow-2xs">
+            <CardContent className="p-3.5 space-y-1 text-center">
+              <span className="text-[10px] uppercase font-bold text-rose-600 dark:text-rose-400 tracking-wider block">
+                Damaged / Defect
+              </span>
+              <span className="text-2xl font-extrabold text-rose-600 dark:text-rose-400">
+                {summary.damagedCount}
+              </span>
+              <p className="text-[10px] text-muted-foreground">Reported wear/damage</p>
+            </CardContent>
+          </Card>
+
+          {/* Missing Equipment */}
+          <Card className="border bg-card shadow-2xs">
+            <CardContent className="p-3.5 space-y-1 text-center">
+              <span className="text-[10px] uppercase font-bold text-purple-600 dark:text-purple-400 tracking-wider block">
+                Missing Assets
+              </span>
+              <span className="text-2xl font-extrabold text-purple-600 dark:text-purple-400">
+                {summary.missingCount}
+              </span>
+              <p className="text-[10px] text-muted-foreground">Unaccounted tags</p>
+            </CardContent>
+          </Card>
+
+          {/* Pending Floor Scan */}
+          <Card className="border bg-card shadow-2xs">
+            <CardContent className="p-3.5 space-y-1 text-center">
+              <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
+                Pending Scan
+              </span>
+              <span className="text-2xl font-extrabold text-muted-foreground">
+                {summary.pendingCount}
+              </span>
+              <p className="text-[10px] text-muted-foreground">Awaiting physical audit</p>
+            </CardContent>
+          </Card>
+
+          {/* Total in Scope */}
+          <Card className="border bg-card shadow-2xs col-span-2 sm:col-span-2 lg:col-span-1 border-primary/20 bg-primary/5">
+            <CardContent className="p-3.5 space-y-1 text-center">
+              <span className="text-[10px] uppercase font-bold text-primary tracking-wider block">
+                Total in Scope
+              </span>
+              <div className="flex items-center justify-center gap-1.5">
+                <Boxes className="w-5 h-5 text-primary" />
+                <span className="text-2xl font-extrabold text-primary tracking-tight">
+                  {summary.totalItems}
+                </span>
+              </div>
+              <p className="text-[10px] text-muted-foreground">Scoped audit assets</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────
+          STATUS RATIO VISUAL PROGRESS BARS
+         ───────────────────────────────────────────────────────────── */}
+      {summary && summary.totalItems > 0 && (
+        <Card className="border bg-card shadow-2xs overflow-hidden">
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground">
+              <span className="flex items-center gap-1.5 text-foreground font-bold">
+                <TrendingUp className="w-4 h-4 text-primary" />
+                <span>Audit Reconciliation Breakdown</span>
+              </span>
+              <span>Total in Scope: {summary.totalItems} Items</span>
+            </div>
+
+            {/* Stacked Percentage Progress Bar */}
+            <div className="h-4 w-full rounded-full bg-muted overflow-hidden flex shadow-inner">
+              {summary.verifiedCount > 0 && (
+                <div
+                  style={{ width: `${(summary.verifiedCount / summary.totalItems) * 100}%` }}
+                  className="bg-emerald-500 h-full transition-all"
+                  title={`Verified: ${summary.verifiedCount}`}
+                />
+              )}
+              {summary.mismatchCount > 0 && (
+                <div
+                  style={{ width: `${(summary.mismatchCount / summary.totalItems) * 100}%` }}
+                  className="bg-amber-500 h-full transition-all"
+                  title={`Relocated / Mismatch: ${summary.mismatchCount}`}
+                />
+              )}
+              {summary.damagedCount > 0 && (
+                <div
+                  style={{ width: `${(summary.damagedCount / summary.totalItems) * 100}%` }}
+                  className="bg-rose-500 h-full transition-all"
+                  title={`Damaged: ${summary.damagedCount}`}
+                />
+              )}
+              {summary.missingCount > 0 && (
+                <div
+                  style={{ width: `${(summary.missingCount / summary.totalItems) * 100}%` }}
+                  className="bg-purple-500 h-full transition-all"
+                  title={`Missing: ${summary.missingCount}`}
+                />
+              )}
+              {summary.pendingCount > 0 && (
+                <div
+                  style={{ width: `${(summary.pendingCount / summary.totalItems) * 100}%` }}
+                  className="bg-muted-foreground/30 h-full transition-all"
+                  title={`Pending: ${summary.pendingCount}`}
+                />
+              )}
+            </div>
+
+            {/* Legend */}
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs pt-1">
+              <div className="flex flex-wrap items-center gap-4 text-[11px]">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
+                  <span>Verified ({summary.verifiedCount})</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
+                  <span>Relocated ({summary.mismatchCount})</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shrink-0" />
+                  <span>Damaged ({summary.damagedCount})</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-purple-500 shrink-0" />
+                  <span>Missing ({summary.missingCount})</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-muted-foreground/40 shrink-0" />
+                  <span>Pending ({summary.pendingCount})</span>
+                </span>
+              </div>
+
+              <div className="text-[11px] text-muted-foreground font-medium">
+                Physical Condition: {summary.conditionGoodCount} Good • {summary.conditionFairCount} Fair • {summary.conditionDamagedCount} Damaged
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ─────────────────────────────────────────────────────────────
           RECONCILIATION TABLE & PAGINATION
@@ -727,7 +730,7 @@ export default function AuditReportsPage() {
                               </span>
                             )}
                           </span>
-                          {item.status === 'MISMATCH' && (
+                          {(item.status === 'MISMATCH' || item.status === 'LOCATION_MISMATCH') && (
                             <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3 shrink-0" />
                               <span>Relocated from {item.expectedLocation}</span>

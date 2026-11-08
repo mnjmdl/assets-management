@@ -17,9 +17,22 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { SettingsModule } from './settings/settings.module';
 import { AppController } from './app.controller';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
 
 @Module({
   controllers: [AppController],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
+    },
+  ],
   imports: [
     // Config (reads .env)
     ConfigModule.forRoot({ isGlobal: true }),

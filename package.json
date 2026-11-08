@@ -10,6 +10,7 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "package:standalone": "node scripts/package-standalone.js",
+    "package:ubuntu": "node scripts/package-ubuntu.js",
     "package:iis": "npm run build && node scripts/package-standalone.js",
     "start": "turbo run start --filter=@repo/api --filter=@repo/web",
     "start:api": "npm run start --workspace=@repo/api",

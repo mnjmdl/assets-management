@@ -6,6 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f172a"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.crystalmartin.assets",
@@ -29,7 +34,7 @@
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ],
       "adaptiveIcon": {
-        "backgroundColor": "#1e3a8a",
+        "backgroundColor": "#0f172a",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

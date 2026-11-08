@@ -5,11 +5,11 @@ import {
   View,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   Image,
   ActivityIndicator,
   Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import {
@@ -228,7 +228,7 @@ export const AssetDetailScreen = () => {
 
   if (!asset) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
         <View style={styles.notFoundContainer}>
           <Text style={styles.notFoundTitle}>Equipment Not Found</Text>
           <Text style={styles.notFoundSub}>
@@ -243,7 +243,7 @@ export const AssetDetailScreen = () => {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Navigation Bar */}
         <View style={styles.navBar}>
@@ -391,7 +391,7 @@ export const AssetDetailScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: '#ffffff',
   },
   scrollContent: {
     padding: 16,

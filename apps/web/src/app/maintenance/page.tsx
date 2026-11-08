@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -108,11 +109,16 @@ export default function MaintenancePage() {
   const prefillAssetId = searchParams?.get('assetId') || '';
 
   const [activeTab, setActiveTab] = useState<'records' | 'schedules'>('records');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data: rawStats, mutate: mutateStats } = useSWR('/api/maintenance/stats');
+  const {
+    data: rawRecords,
+    error: recordsError,
+    isLoading: recordsLoading,
+    mutate: mutateRecords,
+  } = useSWR('/api/maintenance/records?limit=100');
+  const { data: rawSchedules, mutate: mutateSchedules } = useSWR('/api/maintenance/schedules?limit=100');
 
-  // Stats
-  const [stats, setStats] = useState<MaintenanceStats>({
+  const stats: MaintenanceStats = rawStats?.data || rawStats || {
     total: 0,
     scheduled: 0,
     inProgress: 0,
@@ -120,11 +126,22 @@ export default function MaintenancePage() {
     cancelled: 0,
     activeSchedules: 0,
     totalSpent: 0,
-  });
+  };
 
-  // Records & Schedules lists
-  const [records, setRecords] = useState<MaintenanceRecordItem[]>([]);
-  const [schedules, setSchedules] = useState<MaintenanceScheduleItem[]>([]);
+  const records: MaintenanceRecordItem[] = Array.isArray(rawRecords?.data)
+    ? rawRecords.data
+    : Array.isArray(rawRecords)
+    ? rawRecords
+    : [];
+
+  const schedules: MaintenanceScheduleItem[] = Array.isArray(rawSchedules?.data)
+    ? rawSchedules.data
+    : Array.isArray(rawSchedules)
+    ? rawSchedules
+    : [];
+
+  const loading = recordsLoading && records.length === 0;
+  const error = recordsError ? recordsError.message || 'Could not load maintenance data' : null;
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -170,42 +187,8 @@ export default function MaintenancePage() {
 
   // Load Data
   const fetchData = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [statsRes, recordsRes, schedulesRes] = await Promise.all([
-        fetch('/api/maintenance/stats'),
-        fetch('/api/maintenance/records?limit=100'),
-        fetch('/api/maintenance/schedules?limit=100'),
-      ]);
-
-      if (statsRes.ok) {
-        const sJson = await statsRes.json();
-        setStats(sJson?.data || sJson || {});
-      }
-
-      if (recordsRes.ok) {
-        const rJson = await recordsRes.json();
-        const rList = Array.isArray(rJson?.data) ? rJson.data : Array.isArray(rJson) ? rJson : [];
-        setRecords(rList);
-      }
-
-      if (schedulesRes.ok) {
-        const scJson = await schedulesRes.json();
-        const scList = Array.isArray(scJson?.data) ? scJson.data : Array.isArray(scJson) ? scJson : [];
-        setSchedules(scList);
-      }
-    } catch (err: any) {
-      console.error('Error loading maintenance data:', err);
-      setError(err.message || 'Could not load maintenance data');
-    } finally {
-      setLoading(false);
-    }
+    await Promise.all([mutateStats(), mutateRecords(), mutateSchedules()]);
   };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
 
   // Pre-fill asset if query params present
   useEffect(() => {

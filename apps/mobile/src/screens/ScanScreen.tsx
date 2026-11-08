@@ -5,17 +5,20 @@ import {
   View,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { ScannerView } from '../components/ScannerView';
 import {
   findCachedAsset,
+  findCachedLocation,
   CachedAsset,
+  CachedLocation,
   recordOfflineAudit,
   getAssetCount,
 } from '../database/db';
@@ -26,6 +29,7 @@ export const ScanScreen = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [scannedCode, setScannedCode] = useState<string | null>(null);
   const [asset, setAsset] = useState<CachedAsset | null>(null);
+  const [matchedLocation, setMatchedLocation] = useState<CachedLocation | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [isDbEmpty, setIsDbEmpty] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -51,20 +55,34 @@ export const ScanScreen = () => {
     setScannedCode(code);
     setNotFound(false);
     setSyncStatus(null);
+    setMatchedLocation(null);
 
-    // Fast indexed SQLite query
+    // 1. Fast indexed SQLite query for equipment asset
     const found = await findCachedAsset(code);
 
     if (found) {
       setAsset(found);
+      setMatchedLocation(null);
       setNotFound(false);
       setIsDbEmpty(false);
-    } else {
-      setAsset(null);
-      setNotFound(true);
-      const count = await getAssetCount();
-      setIsDbEmpty(count === 0);
+      return;
     }
+
+    // 2. Check if code is a Location QR Placard (e.g. LOC:B1MF or B1MF)
+    const foundLoc = await findCachedLocation(code);
+    if (foundLoc) {
+      setMatchedLocation(foundLoc);
+      setAsset(null);
+      setNotFound(false);
+      setIsDbEmpty(false);
+      return;
+    }
+
+    setAsset(null);
+    setMatchedLocation(null);
+    setNotFound(true);
+    const count = await getAssetCount();
+    setIsDbEmpty(count === 0);
   };
 
   const handleDirectSync = async () => {
@@ -90,6 +108,14 @@ export const ScanScreen = () => {
 
   const handleConfirmAudit = async (status: 'FOUND' | 'DAMAGED' | 'LOCATION_MISMATCH') => {
     if (!asset) return;
+
+    if (recentScans.some((s) => s.code === asset.assetCode)) {
+      Alert.alert(
+        'Duplicate Asset Scanned',
+        `⚠️ Equipment ${asset.assetCode} (${asset.name}) has already been recorded in this scanning batch.\n\nDuplicate scanning is not allowed and this record was NOT saved.`,
+      );
+      return;
+    }
 
     try {
       const now = new Date().toISOString();
@@ -129,12 +155,13 @@ export const ScanScreen = () => {
 
   const handleClear = () => {
     setAsset(null);
+    setMatchedLocation(null);
     setScannedCode(null);
     setNotFound(false);
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Top Header */}
         <View style={styles.header}>
@@ -147,9 +174,73 @@ export const ScanScreen = () => {
         {/* Scanner Component (Hardware wedge & on-demand camera) */}
         <ScannerView
           onScan={handleScan}
-          isScanningLocked={asset !== null}
+          isScanningLocked={asset !== null || matchedLocation !== null}
           onCameraActiveChange={handleCameraActiveChange}
         />
+
+        {/* Scanned Location Placard Card */}
+        {matchedLocation && (
+          <View style={styles.locationCard}>
+            <View style={styles.locationHeaderRow}>
+              <View style={styles.locationIconBadge}>
+                <Ionicons name="location" size={24} color={theme.colors.primary} />
+              </View>
+              <View style={styles.locationHeaderInfo}>
+                <Text style={styles.locationCardTitle}>{matchedLocation.name}</Text>
+                <Text style={styles.locationCardSub}>
+                  {matchedLocation.type} • Code: {matchedLocation.code}
+                </Text>
+              </View>
+            </View>
+
+            {matchedLocation.fullPath && (
+              <View style={styles.pathRow}>
+                <Ionicons name="git-branch-outline" size={14} color={theme.colors.textMuted} />
+                <Text style={styles.pathText} numberOfLines={1}>
+                  {matchedLocation.fullPath}
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.locationActionButtons}>
+              <TouchableOpacity
+                style={styles.locationAuditBtn}
+                onPress={() => {
+                  const loc = matchedLocation;
+                  handleClear();
+                  (navigation as any).navigate('MainTabs', {
+                    screen: 'Audits',
+                    params: { initialLocation: loc },
+                  });
+                }}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="clipboard-outline" size={17} color="#ffffff" style={{ marginRight: 6 }} />
+                <Text style={styles.locationAuditBtnText}>Start Station Audit Here</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.locationViewBtn}
+                onPress={() => {
+                  const loc = matchedLocation;
+                  handleClear();
+                  (navigation as any).navigate('MainTabs', {
+                    screen: 'Assets',
+                    params: { search: loc.name },
+                  });
+                }}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="cube-outline" size={17} color={theme.colors.primary} style={{ marginRight: 6 }} />
+                <Text style={styles.locationViewBtnText}>View Equipment at Station</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.clearBtn} onPress={handleClear} activeOpacity={0.8}>
+                <Text style={styles.clearBtnText}>Dismiss</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         {/* Scanned Result Card */}
         {asset && (
@@ -447,6 +538,91 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     fontSize: 12,
     fontWeight: '600',
+  },
+  locationCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: theme.borderRadius.lg,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.primaryBorder,
+    marginTop: 12,
+    ...theme.shadows.card,
+  },
+  locationHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  locationIconBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: theme.colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  locationHeaderInfo: {
+    flex: 1,
+  },
+  locationCardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: theme.colors.textPrimary,
+  },
+  locationCardSub: {
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  pathRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.background,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginBottom: 14,
+    gap: 6,
+  },
+  pathText: {
+    fontSize: 11,
+    color: theme.colors.textSecondary,
+    flex: 1,
+  },
+  locationActionButtons: {
+    gap: 8,
+  },
+  locationAuditBtn: {
+    backgroundColor: theme.colors.primary,
+    borderRadius: 8,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  locationAuditBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  locationViewBtn: {
+    backgroundColor: theme.colors.primaryLight,
+    borderWidth: 1,
+    borderColor: theme.colors.primaryBorder,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  locationViewBtnText: {
+    color: theme.colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
   },
   notFoundCard: {
     backgroundColor: theme.colors.dangerLight,

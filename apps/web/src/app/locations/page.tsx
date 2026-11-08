@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import Link from 'next/link';
 import QRCode from 'qrcode';
 import {
@@ -39,6 +40,7 @@ interface LocationNode {
   parentId?: string | null;
   assetCount?: number;
   totalAssetCount?: number;
+  directAssetCount?: number;
   building?: string;
   floor?: string;
   room?: string;
@@ -47,10 +49,13 @@ interface LocationNode {
 }
 
 export default function LocationsPage() {
-  const [tree, setTree] = useState<LocationNode[]>([]);
+  const { data: rawTree, error: treeError, isLoading, mutate: mutateTree } = useSWR('/api/locations/tree');
+
+  const tree: LocationNode[] = (rawTree?.data !== undefined ? rawTree.data : rawTree) || [];
+  const loading = isLoading && (!Array.isArray(tree) || tree.length === 0);
+  const error = treeError ? treeError.message || 'Error loading live locations.' : null;
+
   const [flatLocations, setFlatLocations] = useState<LocationNode[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
@@ -75,60 +80,56 @@ export default function LocationsPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Fetch live location tree from DB
-  const fetchTree = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/locations/tree');
-      if (!res.ok) {
-        throw new Error('Failed to load locations from database.');
-      }
-      const json = await res.json();
-      const data: LocationNode[] = json?.data !== undefined ? json.data : json;
-
-      if (Array.isArray(data)) {
-        setTree(data);
-
-        // Auto-expand all top-level nodes
-        const defaultExpanded: Record<string, boolean> = {};
-        const flatten = (nodes: LocationNode[]) => {
-          nodes.forEach((n) => {
-            defaultExpanded[n.id] = true;
-            if (n.children && n.children.length > 0) {
-              flatten(n.children);
-            }
-          });
-        };
-        flatten(data);
-        setExpandedNodes(defaultExpanded);
-
-        // Flatten all nodes for parent selection in Add modal
-        const flat: LocationNode[] = [];
-        const extractFlat = (nodes: LocationNode[]) => {
-          nodes.forEach((n) => {
-            flat.push(n);
-            if (n.children && n.children.length > 0) {
-              extractFlat(n.children);
-            }
-          });
-        };
-        extractFlat(data);
-        setFlatLocations(flat);
-      } else {
-        setTree([]);
-        setFlatLocations([]);
-      }
-    } catch (err: any) {
-      setError(err.message || 'Error loading live locations.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchTree();
-  }, []);
+    if (Array.isArray(tree) && tree.length > 0) {
+      // Backend /locations/tree already calculates directAssetCount and rolls up totalAssetCount.
+      // Base parent sums strictly on directAssetCount so child quantities are never double counted.
+      const rollupTree = (node: LocationNode): number => {
+        const direct =
+          node.directAssetCount !== undefined
+            ? node.directAssetCount
+            : (node.children && node.children.length > 0 ? 0 : (node.assetCount || 0));
+        let sum = direct;
+        if (node.children && node.children.length > 0) {
+          for (const child of node.children) {
+            sum += rollupTree(child);
+          }
+        }
+        node.totalAssetCount = sum;
+        node.assetCount = sum;
+        return sum;
+      };
+      tree.forEach(rollupTree);
+
+      const defaultExpanded: Record<string, boolean> = {};
+      const flatten = (nodes: LocationNode[]) => {
+        nodes.forEach((n) => {
+          defaultExpanded[n.id] = true;
+          if (n.children && n.children.length > 0) {
+            flatten(n.children);
+          }
+        });
+      };
+      flatten(tree);
+      setExpandedNodes((prev) => ({ ...defaultExpanded, ...prev }));
+
+      const flat: LocationNode[] = [];
+      const extractFlat = (nodes: LocationNode[]) => {
+        nodes.forEach((n) => {
+          flat.push(n);
+          if (n.children && n.children.length > 0) {
+            extractFlat(n.children);
+          }
+        });
+      };
+      extractFlat(tree);
+      setFlatLocations(flat);
+    }
+  }, [tree]);
+
+  const fetchTree = async () => {
+    await mutateTree();
+  };
 
   // Generate real QR code and download placard with location name & code
   useEffect(() => {

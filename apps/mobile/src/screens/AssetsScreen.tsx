@@ -6,18 +6,25 @@ import {
   TextInput,
   TouchableOpacity,
   FlatList,
-  SafeAreaView,
   ActivityIndicator,
   RefreshControl,
   Modal,
   Alert,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import { useAudioPlayer } from 'expo-audio';
+import { useAuth } from '../context/AuthContext';
+import {
+  triggerLiveSync,
+  subscribeOutboxChanges,
+  getSyncSummary,
+  isOutboxSyncing,
+} from '../services/syncManager';
 import {
   getCachedAssetsPaginated,
   CachedAsset,
@@ -60,6 +67,62 @@ export const AssetsScreen = () => {
   const audioPlayer = useAudioPlayer(beepSound);
 
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  const { isOfflineMode, isOnline } = useAuth();
+  const [outboxCount, setOutboxCount] = useState<number>(0);
+  const [isSyncingOutbox, setIsSyncingOutbox] = useState<boolean>(false);
+
+  const refreshOutboxStatus = useCallback(async () => {
+    try {
+      const summary = await getSyncSummary();
+      setOutboxCount(summary.totalOutboxCount);
+      setIsSyncingOutbox(isOutboxSyncing());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    refreshOutboxStatus();
+    const unsub = subscribeOutboxChanges(() => {
+      refreshOutboxStatus();
+    });
+    return () => unsub();
+  }, [refreshOutboxStatus]);
+
+  const handleManualSyncPress = async () => {
+    if (isOfflineMode) {
+      Alert.alert(
+        'Offline Mode Active',
+        'Device is currently operating offline. Scans are safely saved in local SQLite storage and will synchronize automatically once reconnected.',
+      );
+      return;
+    }
+
+    if (outboxCount === 0) {
+      Alert.alert('Cloud Synced', 'All records are already up to date on the server.');
+      return;
+    }
+
+    setIsSyncingOutbox(true);
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
+
+    try {
+      const res = await triggerLiveSync({ force: true });
+      await refreshOutboxStatus();
+      if (res.success && res.totalUploaded > 0) {
+        Alert.alert('Sync Successful', `Synchronized ${res.totalUploaded} records with the server.`);
+      } else if (res.success) {
+        Alert.alert('Sync Status', 'All records are up to date.');
+      } else {
+        Alert.alert('Sync Queued', 'Could not reach server. Data remains securely saved in local SQLite.');
+      }
+    } catch {
+      Alert.alert('Sync Error', 'An error occurred during synchronization.');
+    } finally {
+      setIsSyncingOutbox(false);
+    }
+  };
 
   useEffect(() => {
     loadInitialCount();
@@ -320,21 +383,69 @@ export const AssetsScreen = () => {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {/* Top Navbar Header */}
       <View style={styles.topNavbar}>
-        <View>
+        <View style={{ flex: 1, marginRight: 8 }}>
           <Text style={styles.pageTitle}>Total Assets</Text>
           <Text style={styles.pageSubtitle}>
             {totalCount.toLocaleString()} equipment records
             {globalCount > 0 && totalCount !== globalCount ? ` of ${globalCount.toLocaleString()}` : ''}
           </Text>
         </View>
-        <View style={styles.cachedBadge}>
-          <Ionicons name="server-outline" size={12} color={theme.colors.primary} />
-          <Text style={styles.cachedBadgeText}>
-            {globalCount > 0 ? `${globalCount.toLocaleString()} Local` : 'SQLite WAL'}
-          </Text>
+
+        <View style={styles.topNavbarRight}>
+          <TouchableOpacity
+            style={[
+              styles.syncPill,
+              !isOnline
+                ? styles.syncPillOffline
+                : outboxCount > 0
+                ? styles.syncPillPending
+                : styles.syncPillSynced,
+            ]}
+            onPress={handleManualSyncPress}
+            activeOpacity={0.7}
+          >
+            {isSyncingOutbox ? (
+              <ActivityIndicator
+                size={10}
+                color={!isOnline ? '#dc2626' : outboxCount > 0 ? '#b45309' : '#15803d'}
+                style={{ marginRight: 4 }}
+              />
+            ) : (
+              <Ionicons
+                name={
+                  !isOnline
+                    ? 'cloud-offline-outline'
+                    : outboxCount > 0
+                    ? 'cloud-upload-outline'
+                    : 'checkmark-circle-outline'
+                }
+                size={12}
+                color={!isOnline ? '#dc2626' : outboxCount > 0 ? '#b45309' : '#15803d'}
+                style={{ marginRight: 4 }}
+              />
+            )}
+            <Text
+              style={[
+                styles.syncPillText,
+                !isOnline
+                  ? styles.syncPillTextOffline
+                  : outboxCount > 0
+                  ? styles.syncPillTextPending
+                  : styles.syncPillTextSynced,
+              ]}
+            >
+              {!isOnline
+                ? outboxCount > 0
+                  ? `${outboxCount} Offline`
+                  : 'Offline'
+                : outboxCount > 0
+                ? `${outboxCount} Pending`
+                : 'Synced'}
+            </Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -538,7 +649,7 @@ export const AssetsScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: '#ffffff',
   },
   topNavbar: {
     flexDirection: 'row',
@@ -560,6 +671,44 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: theme.colors.textMuted,
     marginTop: 2,
+  },
+  topNavbarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  syncPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  syncPillSynced: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+  },
+  syncPillPending: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+  },
+  syncPillOffline: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  syncPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  syncPillTextSynced: {
+    color: '#15803d',
+  },
+  syncPillTextPending: {
+    color: '#b45309',
+  },
+  syncPillTextOffline: {
+    color: '#dc2626',
   },
   cachedBadge: {
     flexDirection: 'row',

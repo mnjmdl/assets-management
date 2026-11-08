@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -58,13 +59,33 @@ interface LocationOption {
 
 export default function AuditsPage() {
   const router = useRouter();
-  const [plans, setPlans] = useState<AuditPlan[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+
+  const {
+    data: plansRes,
+    error: plansError,
+    isLoading: plansLoading,
+    mutate: mutatePlans,
+  } = useSWR('/api/audits/plans');
+
+  const { data: locationsRes } = useSWR('/api/locations');
+
+  const plans: AuditPlan[] = Array.isArray(plansRes?.data)
+    ? plansRes.data
+    : Array.isArray(plansRes)
+    ? plansRes
+    : [];
+
+  const locations: LocationOption[] = Array.isArray(locationsRes?.data)
+    ? locationsRes.data
+    : Array.isArray(locationsRes)
+    ? locationsRes
+    : [];
+
+  const loading = plansLoading && plans.length === 0;
+  const error = plansError ? plansError.message || 'Failed to connect to audit services.' : null;
 
   // New Audit Plan modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [locations, setLocations] = useState<LocationOption[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -77,53 +98,15 @@ export default function AuditsPage() {
     description: '',
   });
 
-  const fetchAuditPlans = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/audits/plans');
-      if (!res.ok) {
-        throw new Error(`Failed to fetch audit plans (${res.status})`);
-      }
-      const json = await res.json();
-      const planList: AuditPlan[] = Array.isArray(json?.data)
-        ? json.data
-        : Array.isArray(json)
-        ? json
-        : [];
-      setPlans(planList);
-    } catch (err: any) {
-      console.error('Failed to load audit plans:', err);
-      setError(err?.message || 'Failed to connect to audit services.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchLocations = async () => {
-    try {
-      const res = await fetch('/api/locations');
-      if (res.ok) {
-        const json = await res.json();
-        const list: LocationOption[] = Array.isArray(json?.data)
-          ? json.data
-          : Array.isArray(json)
-          ? json
-          : [];
-        setLocations(list);
-        if (list.length > 0 && !form.selectedLocationId) {
-          setForm((prev) => ({ ...prev, selectedLocationId: list[0].id }));
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load locations for audit plan:', e);
-    }
-  };
-
   useEffect(() => {
-    fetchAuditPlans();
-    fetchLocations();
-  }, []);
+    if (locations.length > 0 && !form.selectedLocationId) {
+      setForm((prev) => ({ ...prev, selectedLocationId: locations[0].id }));
+    }
+  }, [locations, form.selectedLocationId]);
+
+  const fetchAuditPlans = async () => {
+    await mutatePlans();
+  };
 
   const handleCreatePlan = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -199,7 +182,7 @@ export default function AuditsPage() {
       if (!res.ok) {
         throw new Error('Failed to delete audit plan');
       }
-      setPlans((prev) => prev.filter((p) => p.id !== planId));
+      await mutatePlans();
     } catch (e: any) {
       alert(e.message || 'Could not delete audit plan');
     }

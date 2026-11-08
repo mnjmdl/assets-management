@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditPlanStatus, AuditType } from '@repo/types';
@@ -22,7 +23,7 @@ export interface FindAllPlansFilter {
 
 @Injectable()
 export class AuditsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   private sessionsCache = new Map<string, { data: any; expiresAt: number }>();
 
@@ -170,7 +171,7 @@ export class AuditsService {
             select: { id: true, name: true, code: true, type: true, parentId: true },
           });
         }
-      } catch {}
+      } catch { }
     }
 
     return {
@@ -516,54 +517,123 @@ export class AuditsService {
     // Find or create the AuditItem for this session + asset.
     let auditItem = await this.prisma.auditItem.findFirst({
       where: { sessionId, assetId: dto.assetId },
+      include: { asset: { select: { assetCode: true, name: true } } },
     });
 
+    const isDamaged = dto.condition === 'DAMAGED' || dto.status === 'DAMAGED';
+
+    // Prevent duplicate scan in the same session
+    if (auditItem && auditItem.status !== 'PENDING' && auditItem.scannedAt !== null) {
+      throw new ConflictException(
+        `Duplicate scan rejected: Asset "${auditItem.asset?.assetCode || dto.assetId}" (${auditItem.asset?.name || ''}) has ALREADY been audited in this session at ${auditItem.scannedAt.toLocaleTimeString()}. Duplicate scans are not allowed.`,
+      );
+    }
+
+    // Prevent duplicate scan across sessions in the same audit plan
+    if (session.planId) {
+      const existingInPlan = await this.prisma.auditItem.findFirst({
+        where: {
+          assetId: dto.assetId,
+          sessionId: { not: sessionId },
+          session: { planId: session.planId },
+          status: { in: ['VERIFIED', 'FOUND', 'DAMAGED', 'MISMATCH'] },
+          scannedAt: { not: null },
+        },
+        include: {
+          session: { include: { location: { select: { name: true, code: true } } } },
+          asset: { select: { assetCode: true, name: true } },
+        },
+      });
+
+      if (existingInPlan) {
+        throw new ConflictException(
+          `Duplicate scan rejected: Asset "${existingInPlan.asset?.assetCode || dto.assetId}" (${existingInPlan.asset?.name || ''}) was ALREADY audited in this audit plan (Station: ${existingInPlan.session?.location?.name || 'another station'}). Duplicate scans are not allowed.`,
+        );
+      }
+
+      // Cross-Session Auto-Reconciliation:
+      // If this asset was previously marked MISSING in another session of this plan:
+      const missingInPlan = await this.prisma.auditItem.findFirst({
+        where: {
+          assetId: dto.assetId,
+          sessionId: { not: sessionId },
+          session: { planId: session.planId },
+          status: 'MISSING',
+        },
+        include: { discrepancy: true },
+      });
+
+      if (missingInPlan) {
+        await this.prisma.auditItem.update({
+          where: { id: missingInPlan.id },
+          data: {
+            notes: `Relocated: Found & scanned at session ${session.id}`,
+          },
+        });
+        if (missingInPlan.discrepancy && !missingInPlan.discrepancy.resolvedAt) {
+          await this.prisma.auditDiscrepancy.update({
+            where: { id: missingInPlan.discrepancy.id },
+            data: {
+              resolvedAt: new Date(),
+              resolutionNotes: `Auto-resolved: Physically found and audited at another station in session ${session.id}`,
+            },
+          });
+        }
+      }
+    }
+
+    const targetLocationId = dto.foundLocationId || session.locationId;
+    const asset = await this.prisma.asset.findUnique({ where: { id: dto.assetId } });
+    const expectedLocationId = auditItem?.expectedLocationId || asset?.locationId;
+    const isLocationMismatch = Boolean(
+      expectedLocationId && targetLocationId && expectedLocationId !== targetLocationId,
+    );
+
+    const finalStatus = isDamaged
+      ? 'DAMAGED'
+      : isLocationMismatch
+        ? 'MISMATCH'
+        : 'VERIFIED';
+
+    let finalItem: any;
+
     if (!auditItem) {
-      const asset = await this.prisma.asset.findUnique({ where: { id: dto.assetId } });
-      auditItem = await this.prisma.auditItem.create({
+      finalItem = await this.prisma.auditItem.create({
         data: {
           sessionId,
           assetId: dto.assetId,
-          expectedLocationId: asset?.locationId,
-          foundLocationId: dto.foundLocationId || session.locationId || asset?.locationId,
-          status: normalizedStatus,
+          expectedLocationId,
+          foundLocationId: targetLocationId,
+          status: finalStatus,
           condition: dto.condition,
           notes: dto.notes,
           scannedAt: new Date(),
         },
       });
     } else {
-      auditItem = await this.prisma.auditItem.update({
+      finalItem = await this.prisma.auditItem.update({
         where: { id: auditItem.id },
         data: {
-          status: normalizedStatus,
-          condition: dto.condition,
-          notes: dto.notes,
-          foundLocationId: dto.foundLocationId || session.locationId || auditItem.expectedLocationId,
+          status: finalStatus,
+          condition: dto.condition || auditItem.condition,
+          notes: dto.notes || auditItem.notes,
+          foundLocationId: targetLocationId || auditItem.expectedLocationId,
           photoPath: dto.photoPath,
           scannedAt: new Date(),
         },
       });
     }
 
-    // Create discrepancy record if the item is MISSING, DAMAGED, or LOCATION_MISMATCH
-    const isLocationMismatch =
-      auditItem.expectedLocationId &&
-      dto.foundLocationId &&
-      auditItem.expectedLocationId !== dto.foundLocationId;
-
-    const discrepancyType =
-      dto.status === 'MISSING'
-        ? 'MISSING'
-        : dto.status === 'DAMAGED'
-        ? 'DAMAGED'
-        : isLocationMismatch
+    // Create or update discrepancy record if the item is DAMAGED or LOCATION_MISMATCH
+    const discrepancyType = isDamaged
+      ? 'DAMAGED'
+      : isLocationMismatch
         ? 'LOCATION_MISMATCH'
         : null;
 
     if (discrepancyType) {
       const existingDiscrepancy = await this.prisma.auditDiscrepancy.findFirst({
-        where: { auditItemId: auditItem.id },
+        where: { auditItemId: finalItem.id },
       });
 
       if (!existingDiscrepancy) {
@@ -571,14 +641,29 @@ export class AuditsService {
           data: {
             sessionId,
             assetId: dto.assetId,
-            auditItemId: auditItem.id,
+            auditItemId: finalItem.id,
             discrepancyType,
+            description: dto.notes || `Discrepancy noted: ${discrepancyType}`,
+          },
+        });
+      } else {
+        await this.prisma.auditDiscrepancy.update({
+          where: { id: existingDiscrepancy.id },
+          data: {
+            discrepancyType,
+            description: dto.notes || `Discrepancy updated: ${discrepancyType}`,
           },
         });
       }
+    } else {
+      await this.prisma.auditDiscrepancy.deleteMany({
+        where: { auditItemId: finalItem.id },
+      });
     }
 
-    return auditItem;
+    this.invalidateSessionsCache();
+
+    return finalItem;
   }
 
   async commitLocationBatch(
@@ -652,12 +737,32 @@ export class AuditsService {
     let discrepanciesCreated = 0;
     const committedItems = [];
 
-    for (const itemDto of dto.items) {
+    // Deduplicate any repeated assetIds in the submitted payload
+    const seenAssetIds = new Set<string>();
+    const uniqueItems = [];
+    for (const it of dto.items) {
+      if (!seenAssetIds.has(it.assetId)) {
+        seenAssetIds.add(it.assetId);
+        uniqueItems.push(it);
+      }
+    }
+
+    for (const itemDto of uniqueItems) {
       const asset = await this.prisma.asset.findUnique({
         where: { id: itemDto.assetId },
         select: { id: true, locationId: true, name: true, assetCode: true },
       });
       if (!asset) continue;
+
+      // Find or check existing AuditItem in this session
+      let auditItem = await this.prisma.auditItem.findFirst({
+        where: { sessionId: session.id, assetId: asset.id },
+      });
+
+      // Reject/skip already audited items to prevent duplicate records
+      if (auditItem && auditItem.status !== 'PENDING' && auditItem.scannedAt !== null) {
+        continue;
+      }
 
       const expectedLocationId = asset.locationId;
       const isLocationMismatch = Boolean(
@@ -668,13 +773,8 @@ export class AuditsService {
       const finalStatus = isDamaged
         ? 'DAMAGED'
         : isLocationMismatch
-        ? 'MISMATCH'
-        : 'VERIFIED';
-
-      // Find or create AuditItem
-      let auditItem = await this.prisma.auditItem.findFirst({
-        where: { sessionId: session.id, assetId: asset.id },
-      });
+          ? 'MISMATCH'
+          : 'VERIFIED';
 
       if (!auditItem) {
         auditItem = await this.prisma.auditItem.create({
@@ -706,8 +806,8 @@ export class AuditsService {
       const discrepancyType = isDamaged
         ? 'DAMAGED'
         : isLocationMismatch
-        ? 'LOCATION_MISMATCH'
-        : null;
+          ? 'LOCATION_MISMATCH'
+          : null;
 
       if (discrepancyType) {
         const existingDisc = await this.prisma.auditDiscrepancy.findFirst({
@@ -762,14 +862,18 @@ export class AuditsService {
     });
   }
 
-  async completeSession(id: string, userId?: string) {
+  async completeSession(id: string, userId?: string, markUnscannedAsMissing: boolean = false) {
     const session = await this.prisma.auditSession.findUnique({
       where: { id },
-      include: { plan: true },
+      include: { plan: true, location: true },
     });
 
     if (!session) {
       throw new NotFoundException(`Audit session with id ${id} not found`);
+    }
+
+    if (markUnscannedAsMissing) {
+      await this.markUnscannedItemsAsMissing(id, userId);
     }
 
     const updatedSession = await this.prisma.auditSession.update({
@@ -794,6 +898,104 @@ export class AuditsService {
 
     this.invalidateSessionsCache();
     return updatedSession;
+  }
+
+  async markUnscannedItemsAsMissing(sessionId: string, userId?: string) {
+    const session = await this.prisma.auditSession.findUnique({
+      where: { id: sessionId },
+      include: { location: true },
+    });
+    if (!session) {
+      throw new NotFoundException(`Session ${sessionId} not found`);
+    }
+
+    const pendingItems = await this.prisma.auditItem.findMany({
+      where: { sessionId, status: 'PENDING' },
+      include: { asset: true },
+    });
+
+    if (pendingItems.length === 0) return { count: 0 };
+
+    for (const item of pendingItems) {
+      await this.prisma.auditItem.update({
+        where: { id: item.id },
+        data: {
+          status: 'MISSING',
+          notes: item.notes
+            ? `${item.notes} | Marked MISSING during session completion`
+            : 'Marked MISSING during session completion',
+        },
+      });
+
+      const existingDiscrepancy = await this.prisma.auditDiscrepancy.findUnique({
+        where: { auditItemId: item.id },
+      });
+
+      if (!existingDiscrepancy) {
+        await this.prisma.auditDiscrepancy.create({
+          data: {
+            sessionId,
+            assetId: item.assetId,
+            auditItemId: item.id,
+            discrepancyType: 'MISSING',
+            description: `Asset "${item.asset?.assetCode || item.assetId}" expected at ${session.location?.name || 'station'} was not found during floor audit`,
+          },
+        });
+      }
+    }
+
+    this.invalidateSessionsCache();
+    return { count: pendingItems.length };
+  }
+
+  async markPlanUnscannedAsMissing(planId: string, userId?: string) {
+    const sessions = await this.prisma.auditSession.findMany({
+      where: { planId },
+      select: { id: true },
+    });
+    let totalCount = 0;
+    for (const session of sessions) {
+      const res = await this.markUnscannedItemsAsMissing(session.id, userId);
+      totalCount += res.count;
+    }
+    return { count: totalCount };
+  }
+
+  async markItemMissing(itemId: string, userId?: string, notes?: string) {
+    const item = await this.prisma.auditItem.findUnique({
+      where: { id: itemId },
+      include: { session: { include: { location: true } }, asset: true },
+    });
+    if (!item) {
+      throw new NotFoundException(`Audit item ${itemId} not found`);
+    }
+
+    await this.prisma.auditItem.update({
+      where: { id: itemId },
+      data: {
+        status: 'MISSING',
+        notes: notes || item.notes || 'Manually marked as MISSING by auditor during floor inspection',
+      },
+    });
+
+    const existingDiscrepancy = await this.prisma.auditDiscrepancy.findUnique({
+      where: { auditItemId: itemId },
+    });
+
+    if (!existingDiscrepancy) {
+      await this.prisma.auditDiscrepancy.create({
+        data: {
+          sessionId: item.sessionId,
+          assetId: item.assetId,
+          auditItemId: item.id,
+          discrepancyType: 'MISSING',
+          description: `Asset "${item.asset?.assetCode || item.assetId}" manually flagged as MISSING at ${item.session?.location?.name || 'station'}`,
+        },
+      });
+    }
+
+    this.invalidateSessionsCache();
+    return { success: true };
   }
 
   async reopenSession(id: string) {
@@ -878,6 +1080,7 @@ export class AuditsService {
   ) {
     const discrepancy = await this.prisma.auditDiscrepancy.findUnique({
       where: { id },
+      include: { auditItem: { include: { asset: true } } },
     });
 
     if (!discrepancy) {
@@ -888,14 +1091,53 @@ export class AuditsService {
       throw new BadRequestException('This discrepancy has already been resolved');
     }
 
-    return this.prisma.auditDiscrepancy.update({
+    let validUserId = resolvedById;
+    if (!validUserId || validUserId === 'admin') {
+      const admin = await this.prisma.user.findFirst({ select: { id: true } });
+      if (admin) validUserId = admin.id;
+    }
+
+    // If this is a MISSING discrepancy and manager approved marking asset as LOST:
+    const shouldMarkAsLost =
+      discrepancy.discrepancyType === 'MISSING' &&
+      (dto.markAssetAsLost === true || dto.action === 'MARK_LOST');
+
+    const asset =
+      discrepancy.auditItem?.asset ||
+      (await this.prisma.asset.findUnique({ where: { id: discrepancy.assetId } }));
+
+    if (shouldMarkAsLost && asset) {
+      // 1. Update Master Asset status to LOST
+      await this.prisma.asset.update({
+        where: { id: discrepancy.assetId },
+        data: { status: 'LOST' },
+      });
+
+      // 2. Record status change in AssetStatusHistory
+      if (validUserId) {
+        await this.prisma.assetStatusHistory.create({
+          data: {
+            assetId: discrepancy.assetId,
+            oldStatus: asset.status,
+            newStatus: 'LOST',
+            changedById: validUserId,
+            reason: dto.resolutionNotes || 'Confirmed missing by manager review after inventory audit',
+          },
+        });
+      }
+    }
+
+    const updated = await this.prisma.auditDiscrepancy.update({
       where: { id },
       data: {
-        resolvedById,
+        resolvedById: validUserId,
         resolvedAt: new Date(),
         resolutionNotes: dto.resolutionNotes,
       },
     });
+
+    this.invalidateSessionsCache();
+    return updated;
   }
 
   /**
@@ -1024,6 +1266,12 @@ export class AuditsService {
         asset.locationId && targetLocationId && asset.locationId !== targetLocationId,
       );
 
+      const finalStatus = isDamaged
+        ? 'DAMAGED'
+        : isLocationMismatch
+          ? 'MISMATCH'
+          : 'VERIFIED';
+
       const auditItem = await this.prisma.auditItem.upsert({
         where: {
           sessionId_assetId: {
@@ -1032,7 +1280,7 @@ export class AuditsService {
           },
         },
         update: {
-          status: isDamaged ? 'DAMAGED' : 'VERIFIED',
+          status: finalStatus,
           condition: updateData.condition || asset.condition || 'GOOD',
           scannedAt: auditedAt,
           notes: dto.notes,
@@ -1043,7 +1291,7 @@ export class AuditsService {
           assetId: asset.id,
           expectedLocationId: asset.locationId,
           foundLocationId: targetLocationId,
-          status: isDamaged ? 'DAMAGED' : 'VERIFIED',
+          status: finalStatus,
           condition: updateData.condition || asset.condition || 'GOOD',
           scannedAt: auditedAt,
           notes: dto.notes,
@@ -1054,8 +1302,8 @@ export class AuditsService {
       const discrepancyType = isDamaged
         ? 'DAMAGED'
         : isLocationMismatch
-        ? 'LOCATION_MISMATCH'
-        : null;
+          ? 'LOCATION_MISMATCH'
+          : null;
 
       if (discrepancyType) {
         const existingDisc = await this.prisma.auditDiscrepancy.findFirst({

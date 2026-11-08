@@ -8,4 +8,10 @@ dist
 uploads/
 generated/
 deploy/
+deploy-ubuntu/
 deploy-iis.zip
+deploy-ubuntu.zip
+deploy-ubuntu.tar.gz
+*.zip
+*.tar.gz
+*.tar

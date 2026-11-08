@@ -277,19 +277,29 @@ export default function ScanPage() {
     itemsToCommit: ScannedAssetItem[],
     locName?: string,
   ) => {
-    if (!selectedPlanId || !targetLocationId || itemsToCommit.length === 0) return;
+    // Deduplicate any repeat tags before submitting
+    const seenAssetIds = new Set<string>();
+    const uniqueItems: ScannedAssetItem[] = [];
+    for (const it of itemsToCommit) {
+      if (!seenAssetIds.has(it.id)) {
+        seenAssetIds.add(it.id);
+        uniqueItems.push(it);
+      }
+    }
+
+    if (!selectedPlanId || !targetLocationId || uniqueItems.length === 0) return;
 
     setIsCommitting(true);
     setCommitSuccessBanner(null);
     setNoticeBanner(null);
 
     try {
-      const count = itemsToCommit.length;
+      const count = uniqueItems.length;
       const displayName = locName || activeLocation?.name || 'this station';
       const payload = {
         locationId: targetLocationId,
         auditorId: 'admin',
-        items: itemsToCommit.map((item) => ({
+        items: uniqueItems.map((item) => ({
           assetId: item.id,
           condition: item.condition,
         })),
@@ -466,11 +476,36 @@ export default function ScanPage() {
                 );
               } else {
                 // Check if already in current location batch
-                const alreadyInBatch = scannedAssets.some((a) => a.id === asset.id);
+                const alreadyInBatch = scannedAssets.some(
+                  (a) =>
+                    a.id === asset.id ||
+                    a.assetCode?.toUpperCase() === asset.assetCode?.toUpperCase(),
+                );
                 if (alreadyInBatch) {
                   playChime('warning');
-                  setNoticeBanner(`⚠️ Asset ${asset.assetCode} is already in this station list.`);
-                } else {
+                  setNoticeBanner(
+                    `⚠️ DUPLICATE: Asset "${asset.assetCode}" is already in this station batch! Duplicate scans are not allowed and not saved.`,
+                  );
+                  return;
+                }
+
+                // Check if already scanned in any session of the audit plan
+                const alreadyAuditedInPlan = planSessions.find((s) =>
+                  s.items?.some(
+                    (it: any) =>
+                      (it.assetId === asset.id ||
+                        it.asset?.assetCode?.toUpperCase() === asset.assetCode?.toUpperCase()) &&
+                      it.status !== 'PENDING' &&
+                      Boolean(it.scannedAt),
+                  ),
+                );
+                if (alreadyAuditedInPlan) {
+                  playChime('warning');
+                  setNoticeBanner(
+                    `⚠️ DUPLICATE: Asset "${asset.assetCode}" (${asset.name}) has ALREADY been audited in station "${alreadyAuditedInPlan.location?.name || alreadyAuditedInPlan.id}". Duplicate scans are not allowed and not saved.`,
+                  );
+                  return;
+                }
                   // Check location mismatch
                   const isMismatch = Boolean(
                     asset.locationId && asset.locationId !== activeLocation.id,
@@ -496,8 +531,7 @@ export default function ScanPage() {
                   );
                 }
               }
-            }
-          } else {
+            } else {
             // ─────────────────────────────────────────────────────────────
             // STANDALONE MODE: No audit plan selected (direct lookup)
             // ─────────────────────────────────────────────────────────────

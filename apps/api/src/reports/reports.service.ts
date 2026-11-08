@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async assetSummaryReport(filter: {
     departmentId?: string;
@@ -54,7 +54,7 @@ export class ReportsService {
       const currentValue = asset.currentValue ? Number(asset.currentValue) : 0;
       const yearsElapsed = asset.purchaseDate
         ? (Date.now() - new Date(asset.purchaseDate).getTime()) /
-          (365.25 * 24 * 3600 * 1000)
+        (365.25 * 24 * 3600 * 1000)
         : 0;
 
       return {
@@ -146,20 +146,48 @@ export class ReportsService {
     let totalDiscrepancies = 0;
     let resolvedDiscrepancies = 0;
 
-    for (const item of items) {
-      if (item.status === 'VERIFIED') verifiedCount++;
-      else if (item.status === 'MISMATCH') mismatchCount++;
-      else if (item.status === 'MISSING') missingCount++;
-      else if (item.status === 'DAMAGED') damagedCount++;
+    const resolvedItems = items.map((i) => {
+      // Determine if there is a location mismatch
+      const isLocationMismatch = Boolean(
+        i.status === 'MISMATCH' ||
+        i.status === 'LOCATION_MISMATCH' ||
+        i.discrepancy?.discrepancyType === 'LOCATION_MISMATCH' ||
+        (i.expectedLocationId &&
+          i.foundLocationId &&
+          i.expectedLocationId !== i.foundLocationId),
+      );
+
+      // Effective status: If location mismatch -> MISMATCH, if damaged -> DAMAGED
+      let effectiveStatus = i.status;
+      if (effectiveStatus === 'LOCATION_MISMATCH') {
+        effectiveStatus = 'MISMATCH';
+      } else if (effectiveStatus === 'FOUND') {
+        effectiveStatus = isLocationMismatch ? 'MISMATCH' : 'VERIFIED';
+      } else if (effectiveStatus === 'VERIFIED' && isLocationMismatch) {
+        effectiveStatus = 'MISMATCH';
+      }
+
+      return {
+        ...i,
+        effectiveStatus,
+        isLocationMismatch,
+      };
+    });
+
+    for (const item of resolvedItems) {
+      if (item.effectiveStatus === 'VERIFIED') verifiedCount++;
+      else if (item.effectiveStatus === 'MISMATCH') mismatchCount++;
+      else if (item.effectiveStatus === 'MISSING') missingCount++;
+      else if (item.effectiveStatus === 'DAMAGED') damagedCount++;
       else pendingCount++;
 
       if (item.condition === 'GOOD') conditionGoodCount++;
       else if (item.condition === 'FAIR') conditionFairCount++;
       else if (item.condition === 'DAMAGED') conditionDamagedCount++;
 
-      if (item.discrepancy) {
+      if (item.discrepancy || item.isLocationMismatch) {
         totalDiscrepancies++;
-        if (item.discrepancy.resolvedAt) resolvedDiscrepancies++;
+        if (item.discrepancy?.resolvedAt) resolvedDiscrepancies++;
       }
     }
 
@@ -183,7 +211,7 @@ export class ReportsService {
         complianceRate,
       },
       plans: allPlans,
-      items: items.map((i) => ({
+      items: resolvedItems.map((i) => ({
         id: i.id,
         planId: i.session.plan.id,
         planName: i.session.plan.name,
@@ -202,12 +230,12 @@ export class ReportsService {
         expectedLocation: i.expectedLocation?.name || 'Unassigned',
         physicalLocation: i.foundLocation?.name || 'Not scanned yet',
         physicalLocationCode: i.foundLocation?.code || '',
-        status: i.status,
+        status: i.effectiveStatus,
         condition: i.condition || '-',
         notes: i.notes,
         scannedAt: i.scannedAt,
-        hasDiscrepancy: Boolean(i.discrepancy),
-        discrepancyType: i.discrepancy?.discrepancyType || null,
+        hasDiscrepancy: Boolean(i.discrepancy) || i.isLocationMismatch,
+        discrepancyType: i.discrepancy?.discrepancyType || (i.isLocationMismatch ? 'LOCATION_MISMATCH' : null),
         discrepancyResolved: Boolean(i.discrepancy?.resolvedAt),
       })),
     };
@@ -287,7 +315,7 @@ export class ReportsService {
         notes: item.notes || '-',
       });
 
-      if (item.status === 'MISMATCH') {
+      if (item.status === 'MISMATCH' || item.status === 'LOCATION_MISMATCH') {
         row.getCell('status').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
       } else if (item.status === 'DAMAGED' || item.status === 'MISSING') {
         row.getCell('status').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
