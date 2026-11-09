@@ -168,6 +168,15 @@ export function TopNavbar() {
                 {/* Navigation Items */}
                 <div className="space-y-0.5">
                   <Link
+                    href="/settings?tab=users"
+                    onClick={() => setIsProfileOpen(false)}
+                    className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-xl text-foreground hover:bg-accent transition-colors"
+                  >
+                    <User className="w-4 h-4 text-muted-foreground" />
+                    <span>My Profile &amp; Users</span>
+                  </Link>
+
+                  <Link
                     href="/settings"
                     onClick={() => setIsProfileOpen(false)}
                     className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-xl text-foreground hover:bg-accent transition-colors"

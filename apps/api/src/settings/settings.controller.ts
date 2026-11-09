@@ -79,10 +79,15 @@ export class SettingsController {
     return this.settingsService.createUser(dto);
   }
 
-  @Put('users/:id')
   @Patch('users/:id')
   @ApiOperation({ summary: 'Update user profile, credentials, role, or active status' })
   updateUser(@Param('id') id: string, @Body() dto: UpdateUserStatusDto) {
+    return this.settingsService.updateUser(id, dto);
+  }
+
+  @Put('users/:id')
+  @ApiOperation({ summary: 'Replace/update user profile, credentials, role, or active status' })
+  replaceUser(@Param('id') id: string, @Body() dto: UpdateUserStatusDto) {
     return this.settingsService.updateUser(id, dto);
   }
 }

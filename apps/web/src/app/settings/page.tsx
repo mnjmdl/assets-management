@@ -112,6 +112,41 @@ export default function SettingsPage() {
   const { data: rawUsers, mutate: mutateUsers } = useSWR('/api/settings/users');
 
   const [settings, setSettings] = useState<Record<string, string>>({});
+  const [currentUser, setCurrentUser] = useState<{
+    id?: string;
+    name?: string;
+    email?: string;
+    role?: string;
+  }>({
+    name: 'System Admin',
+    email: 'system.admin@assets.com',
+    role: 'SUPER_ADMIN',
+  });
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('user');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.email) {
+          setCurrentUser(parsed);
+        }
+      }
+    } catch {}
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab') as TabType;
+      if (
+        tabParam &&
+        ['general', 'assets', 'audits', 'maintenance', 'categories', 'users', 'system'].includes(
+          tabParam,
+        )
+      ) {
+        setActiveTab(tabParam);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (rawSettings) {
@@ -325,6 +360,23 @@ export default function SettingsPage() {
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.message || 'Failed to update user');
+        }
+
+        if (
+          currentUser.email &&
+          (currentUser.email.toLowerCase() === editingUser.email.toLowerCase() ||
+            currentUser.id === editingUser.id)
+        ) {
+          const updatedUserObj = {
+            ...currentUser,
+            name: userForm.name,
+            email: userForm.email,
+            role: userForm.role,
+          };
+          setCurrentUser(updatedUserObj);
+          try {
+            localStorage.setItem('user', JSON.stringify(updatedUserObj));
+          } catch {}
         }
 
         setIsUserModalOpen(false);
@@ -1090,27 +1142,64 @@ export default function SettingsPage() {
             <div className="p-3.5 rounded-xl border bg-muted/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-sm border border-primary/20 shrink-0">
-                  SA
+                  {currentUser.name
+                    ? currentUser.name
+                        .split(' ')
+                        .map((n) => n[0])
+                        .join('')
+                        .slice(0, 2)
+                        .toUpperCase()
+                    : 'SA'}
                 </div>
                 <div>
                   <span className="font-semibold text-xs text-foreground block">
-                    Current Signed In Account: System Admin (system.admin@assets.com)
+                    Current Signed In Account: {currentUser.name || 'System Admin'} ({currentUser.email || 'system.admin@assets.com'})
                   </span>
                   <span className="text-[11px] text-muted-foreground block">
-                    Role: SUPER_ADMIN • Active enterprise session token stored
+                    Role: {currentUser.role || 'SUPER_ADMIN'} • Active enterprise session token stored
                   </span>
                 </div>
               </div>
 
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleSignOut}
-                className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/10 h-9 shrink-0"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Sign Out</span>
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const found = users.find(
+                      (u) =>
+                        currentUser.email &&
+                        u.email.toLowerCase() === currentUser.email.toLowerCase(),
+                    );
+                    if (found) {
+                      handleOpenUserModal(found);
+                    } else {
+                      handleOpenUserModal({
+                        id: currentUser.id || '',
+                        name: currentUser.name || '',
+                        email: currentUser.email || '',
+                        role: currentUser.role || 'SUPER_ADMIN',
+                        phone: '',
+                        isActive: true,
+                        createdAt: new Date().toISOString(),
+                      });
+                    }
+                  }}
+                  className="gap-2 h-9 text-xs shrink-0"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit Profile</span>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSignOut}
+                  className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/10 h-9 shrink-0"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Sign Out</span>
+                </Button>
+              </div>
             </div>
 
             <div className="border rounded-xl overflow-hidden">

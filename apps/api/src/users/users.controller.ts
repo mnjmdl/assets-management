@@ -71,6 +71,13 @@ export class UsersController {
     return this.usersService.update(id, dto);
   }
 
+  @Patch(':id')
+  @Auth(Role.SUPER_ADMIN, Role.ASSET_MANAGER)
+  @ApiOperation({ summary: 'Patch a user (SUPER_ADMIN, ASSET_MANAGER)' })
+  patchUser(@Param('id') id: string, @Body() dto: UpdateUserDto) {
+    return this.usersService.update(id, dto);
+  }
+
   @Patch(':id/password')
   @Auth()
   @ApiOperation({ summary: 'Change own password' })
