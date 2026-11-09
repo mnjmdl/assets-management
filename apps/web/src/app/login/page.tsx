@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
+  Shield,
   ArrowRight,
   Boxes,
 } from 'lucide-react';
@@ -27,6 +28,16 @@ function LoginForm() {
   const [successMsg, setSuccessMsg] = useState<string | null>(
     signedOut ? 'You have been successfully signed out.' : null,
   );
+
+  const isDev =
+    process.env.NODE_ENV === 'development' ||
+    process.env.NEXT_PUBLIC_SHOW_DEMO_CREDENTIALS === 'true';
+
+  const fillAdminCredentials = () => {
+    setEmail('admin@assetmgmt.com');
+    setPassword('Password123!');
+    setError(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -163,6 +174,25 @@ function LoginForm() {
               )}
             </Button>
           </form>
+
+          {/* Quick Demo Fill Helper — Visible only in Development */}
+          {isDev && (
+            <div className="pt-2 border-t text-center space-y-2">
+              <span className="text-[11px] text-muted-foreground block">
+                Quick access demo credentials:
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={fillAdminCredentials}
+                className="w-full text-xs h-9 gap-1.5 font-medium border-dashed text-muted-foreground hover:text-foreground"
+              >
+                <Shield className="w-3.5 h-3.5 text-primary" />
+                <span>Autofill Super Admin (admin@assetmgmt.com)</span>
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
