@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
-  Shield,
   ArrowRight,
   Boxes,
 } from 'lucide-react';
@@ -83,12 +82,6 @@ function LoginForm() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const fillAdminCredentials = () => {
-    setEmail('admin@assetmgmt.com');
-    setPassword('Password123!');
-    setError(null);
   };
 
   return (
@@ -170,23 +163,6 @@ function LoginForm() {
               )}
             </Button>
           </form>
-
-          {/* Quick Demo Fill Helper */}
-          <div className="pt-2 border-t text-center space-y-2">
-            <span className="text-[11px] text-muted-foreground block">
-              Quick access demo credentials:
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={fillAdminCredentials}
-              className="w-full text-xs h-9 gap-1.5 font-medium border-dashed"
-            >
-              <Shield className="w-3.5 h-3.5 text-primary" />
-              <span>Autofill Super Admin (admin@assetmgmt.com)</span>
-            </Button>
-          </div>
         </CardContent>
       </Card>
     </div>
