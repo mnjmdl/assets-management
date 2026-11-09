@@ -13,6 +13,7 @@ import {
   Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_PRODUCTION_API_URL, DEFAULT_LOCAL_API_URL } from '../config/env';
 import { theme } from '../config/theme';
@@ -20,8 +21,10 @@ import { theme } from '../config/theme';
 export const LoginScreen = () => {
   const { login, continueOffline, cachedUser, serverUrl, setServerUrl } = useAuth();
 
-  const [email, setEmail] = useState('admin@assetmgmt.com');
-  const [password, setPassword] = useState('Password123!');
+  const isDev = __DEV__ || process.env.EXPO_PUBLIC_SHOW_DEMO_CREDENTIALS === 'true';
+
+  const [email, setEmail] = useState(isDev ? 'admin@assetmgmt.com' : '');
+  const [password, setPassword] = useState(isDev ? 'Password123!' : '');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -169,6 +172,26 @@ export const LoginScreen = () => {
                 <Text style={styles.offlineHint}>
                   (Operate inside dead factory zones with cached session)
                 </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Quick Demo Fill Helper — Visible only in Development */}
+          {isDev && (
+            <View style={styles.demoSection}>
+              <View style={styles.divider} />
+              <Text style={styles.demoHint}>Quick access demo credentials (Development):</Text>
+              <TouchableOpacity
+                style={styles.buttonDemo}
+                onPress={() => {
+                  setEmail('admin@assetmgmt.com');
+                  setPassword('Password123!');
+                  setErrorMessage(null);
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="shield-checkmark-outline" size={15} color={theme.colors.primary} />
+                <Text style={styles.buttonDemoText}>Autofill Super Admin (admin@assetmgmt.com)</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -437,6 +460,33 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     fontSize: 10,
     marginTop: 2,
+  },
+  demoSection: {
+    marginTop: 14,
+  },
+  demoHint: {
+    fontSize: 10,
+    color: theme.colors.textMuted,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  buttonDemo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderStyle: 'dashed',
+    backgroundColor: '#eff6ff',
+  },
+  buttonDemoText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: theme.colors.primary,
   },
   footer: {
     alignItems: 'center',
