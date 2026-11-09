@@ -267,10 +267,27 @@ export class SettingsService {
       throw new NotFoundException(`User with id ${id} not found`);
     }
 
+    if (dto.email && dto.email.toLowerCase().trim() !== user.email.toLowerCase().trim()) {
+      const emailNormalized = dto.email.toLowerCase().trim();
+      const existing = await this.prisma.user.findUnique({
+        where: { email: emailNormalized },
+      });
+      if (existing && existing.id !== id) {
+        throw new BadRequestException(`User with email "${dto.email}" already exists`);
+      }
+    }
+
+    let passwordHash: string | undefined;
+    if (dto.password && dto.password.trim().length > 0) {
+      passwordHash = await bcrypt.hash(dto.password, 10);
+    }
+
     return this.prisma.user.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
+        ...(dto.email !== undefined ? { email: dto.email.toLowerCase().trim() } : {}),
+        ...(passwordHash ? { passwordHash } : {}),
         ...(dto.role !== undefined ? { role: dto.role } : {}),
         ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),

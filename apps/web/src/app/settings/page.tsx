@@ -148,12 +148,14 @@ export default function SettingsPage() {
 
   // Users State
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<UserItem | null>(null);
   const [userForm, setUserForm] = useState({
     name: '',
     email: '',
     password: '',
     role: 'AUDITOR',
     phone: '',
+    isActive: true,
   });
 
   // Fetch all initial data
@@ -274,28 +276,82 @@ export default function SettingsPage() {
   };
 
   // User Actions
-  const handleCreateUser = async (e: React.FormEvent) => {
+  const handleOpenUserModal = (u?: UserItem) => {
+    if (u) {
+      setEditingUser(u);
+      setUserForm({
+        name: u.name,
+        email: u.email,
+        password: '',
+        role: u.role,
+        phone: u.phone || '',
+        isActive: u.isActive,
+      });
+    } else {
+      setEditingUser(null);
+      setUserForm({
+        name: '',
+        email: '',
+        password: '',
+        role: 'AUDITOR',
+        phone: '',
+        isActive: true,
+      });
+    }
+    setIsUserModalOpen(true);
+  };
+
+  const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/settings/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(userForm),
-      });
+      if (editingUser) {
+        const payload: Record<string, any> = {
+          name: userForm.name,
+          email: userForm.email,
+          role: userForm.role,
+          phone: userForm.phone,
+          isActive: userForm.isActive,
+        };
+        if (userForm.password && userForm.password.trim().length > 0) {
+          payload.password = userForm.password;
+        }
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || 'Failed to create user');
+        const res = await fetch(`/api/settings/users/${editingUser.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || 'Failed to update user');
+        }
+
+        setIsUserModalOpen(false);
+        setEditingUser(null);
+        await mutateUsers();
+        setSaveMessage(`User "${userForm.name}" updated successfully!`);
+        setTimeout(() => setSaveMessage(null), 3500);
+      } else {
+        const res = await fetch('/api/settings/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(userForm),
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || 'Failed to create user');
+        }
+
+        setIsUserModalOpen(false);
+        setUserForm({ name: '', email: '', password: '', role: 'AUDITOR', phone: '', isActive: true });
+        await mutateUsers();
+        setSaveMessage('New user registered successfully!');
+        setTimeout(() => setSaveMessage(null), 3500);
       }
-
-      setIsUserModalOpen(false);
-      setUserForm({ name: '', email: '', password: '', role: 'AUDITOR', phone: '' });
-
-      await mutateUsers();
-      setSaveMessage('New user registered successfully!');
-      setTimeout(() => setSaveMessage(null), 3500);
     } catch (err: any) {
-      alert(err.message || 'Failed to create user');
+      alert(err.message || 'Failed to save user');
     }
   };
 
@@ -1022,7 +1078,7 @@ export default function SettingsPage() {
             </div>
             <Button
               size="sm"
-              onClick={() => setIsUserModalOpen(true)}
+              onClick={() => handleOpenUserModal()}
               className="gap-1.5 h-9 shadow-sm shrink-0"
             >
               <Plus className="w-4 h-4" />
@@ -1103,14 +1159,29 @@ export default function SettingsPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-right pr-4">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 text-xs text-muted-foreground hover:text-foreground"
-                          onClick={() => handleToggleUserStatus(u)}
-                        >
-                          {u.isActive ? 'Deactivate' : 'Activate'}
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                            onClick={() => handleOpenUserModal(u)}
+                            title="Edit User"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={`h-8 text-xs font-medium ${
+                              u.isActive
+                                ? 'text-muted-foreground hover:text-destructive'
+                                : 'text-emerald-600 hover:text-emerald-700'
+                            }`}
+                            onClick={() => handleToggleUserStatus(u)}
+                          >
+                            {u.isActive ? 'Deactivate' : 'Activate'}
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -1331,12 +1402,14 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* ─── User Creation Modal ────────────────────────────────────────────── */}
+      {/* ─── User Creation / Edit Modal ────────────────────────────────────── */}
       {isUserModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between border-b pb-3">
-              <h2 className="text-base font-bold text-foreground">Add New System User</h2>
+              <h2 className="text-base font-bold text-foreground">
+                {editingUser ? 'Edit System User' : 'Add New System User'}
+              </h2>
               <Button
                 variant="ghost"
                 size="icon"
@@ -1347,7 +1420,7 @@ export default function SettingsPage() {
               </Button>
             </div>
 
-            <form onSubmit={handleCreateUser} className="space-y-3.5">
+            <form onSubmit={handleSaveUser} className="space-y-3.5">
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-foreground">Full Name</label>
                 <Input
@@ -1373,13 +1446,16 @@ export default function SettingsPage() {
 
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-foreground">
-                  Temporary Password (min 6 chars)
+                  {editingUser
+                    ? 'New Password (Optional, leave blank to keep current)'
+                    : 'Temporary Password (min 6 chars)'}
                 </label>
                 <Input
-                  required
+                  required={!editingUser}
+                  minLength={editingUser ? undefined : 6}
                   type="password"
                   className="h-9 text-xs"
-                  placeholder="••••••••"
+                  placeholder={editingUser ? '•••••••• (unchanged)' : '••••••••'}
                   value={userForm.password}
                   onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
                 />
@@ -1410,6 +1486,23 @@ export default function SettingsPage() {
                 />
               </div>
 
+              {editingUser && (
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="userActive"
+                    className="h-4 w-4 rounded border-primary accent-primary"
+                    checked={userForm.isActive}
+                    onChange={(e) =>
+                      setUserForm({ ...userForm, isActive: e.target.checked })
+                    }
+                  />
+                  <label htmlFor="userActive" className="text-xs font-medium text-foreground cursor-pointer">
+                    Account is Active (permitted to log in and conduct operations)
+                  </label>
+                </div>
+              )}
+
               <div className="pt-3 flex justify-end gap-2 border-t">
                 <Button
                   type="button"
@@ -1420,7 +1513,7 @@ export default function SettingsPage() {
                   Cancel
                 </Button>
                 <Button type="submit" size="sm">
-                  Register User
+                  {editingUser ? 'Update User' : 'Register User'}
                 </Button>
               </div>
             </form>

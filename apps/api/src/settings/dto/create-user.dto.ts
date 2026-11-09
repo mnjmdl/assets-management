@@ -34,6 +34,17 @@ export class UpdateUserStatusDto {
   name?: string;
 
   @ApiProperty({ required: false })
+  @IsEmail()
+  @IsOptional()
+  email?: string;
+
+  @ApiProperty({ required: false, minLength: 6 })
+  @IsString()
+  @MinLength(6)
+  @IsOptional()
+  password?: string;
+
+  @ApiProperty({ required: false })
   @IsString()
   @IsOptional()
   role?: string;
