@@ -96,12 +96,20 @@ cd /var/www/assets-management
 
 # 3. Configure Database Connection (.env)
 nano .env
+# Also verify/copy to api/.env
+cp .env api/.env
 ```
-Ensure your database string points to your internal enterprise MSSQL server:
+Ensure your database string points to your internal enterprise MSSQL server (replace `192.168.45.51` with your actual SQL Server IP):
 ```env
 DATABASE_URL="sqlserver://192.168.45.51:1433;database=AssetsManagement;user=cmaautocutter;password=Crystal@123;encrypt=true;trustServerCertificate=true"
 NEXT_PUBLIC_API_URL=http://<YOUR_UBUNTU_IP>/api
 ```
+
+> [!IMPORTANT]
+> If Prisma displays `Can't reach database server at localhost:1433`:
+> - Your Ubuntu machine does not run MSSQL locally. `DATABASE_URL` in `/var/www/assets-management/api/.env` must point to your network SQL server host (`192.168.45.51:1433`).
+> - After editing `.env`, copy it to `api/`: `cp /var/www/assets-management/.env /var/www/assets-management/api/.env`.
+> - Reload PM2 environment: `pm2 restart all --update-env`.
 
 ```bash
 # 4. Run the one-click installer

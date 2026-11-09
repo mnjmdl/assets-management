@@ -34,8 +34,11 @@ import { RolesGuard } from './common/guards/roles.guard';
     },
   ],
   imports: [
-    // Config (reads .env)
-    ConfigModule.forRoot({ isGlobal: true }),
+    // Config (reads .env from local and parent monorepo directories)
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env', '../.env', '../../.env'],
+    }),
 
     // Rate limiting
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),

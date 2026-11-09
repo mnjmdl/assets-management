@@ -267,7 +267,34 @@ server {
 fs.writeFileSync(path.join(DEPLOY_NGINX_DIR, 'assets-management.conf'), nginxConf);
 
 // 5. Add PM2 Ecosystem Config for Standalone Ubuntu
-const ecosystemConf = `module.exports = {
+const ecosystemConf = `const path = require('path');
+const fs = require('fs');
+
+function loadEnv(filePath) {
+  const vars = {};
+  if (fs.existsSync(filePath)) {
+    const lines = fs.readFileSync(filePath, 'utf8').split('\\n');
+    for (const l of lines) {
+      const trimmed = l.trim();
+      if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+        const i = trimmed.indexOf('=');
+        const k = trimmed.slice(0, i).trim();
+        let v = trimmed.slice(i + 1).trim();
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+          v = v.slice(1, -1);
+        }
+        vars[k] = v;
+      }
+    }
+  }
+  return vars;
+}
+
+const rootEnv = loadEnv(path.resolve(__dirname, '.env'));
+const apiEnv = loadEnv(path.resolve(__dirname, 'api/.env'));
+const mergedApiEnv = { ...rootEnv, ...apiEnv };
+
+module.exports = {
   apps: [
     {
       name: 'assets-api',
@@ -278,6 +305,7 @@ const ecosystemConf = `module.exports = {
       watch: false,
       max_memory_restart: '1G',
       env: {
+        ...mergedApiEnv,
         NODE_ENV: 'production',
         API_PORT: 3001,
         PORT: 3001,
@@ -292,6 +320,7 @@ const ecosystemConf = `module.exports = {
       watch: false,
       max_memory_restart: '1G',
       env: {
+        ...rootEnv,
         NODE_ENV: 'production',
         PORT: 3000,
         HOSTNAME: '0.0.0.0',
@@ -309,11 +338,18 @@ const startAllSh = `#!/usr/bin/env bash
 DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
+# Sync environment config between root and api
+if [ -f "$DIR/.env" ]; then
+    cp -f "$DIR/.env" "$DIR/api/.env" 2>/dev/null || true
+elif [ -f "$DIR/api/.env" ]; then
+    cp -f "$DIR/api/.env" "$DIR/.env" 2>/dev/null || true
+fi
+
 mkdir -p logs
 
 if command -v pm2 >/dev/null 2>&1; then
     echo "Starting services with PM2..."
-    pm2 startOrReload ecosystem.config.js
+    pm2 startOrReload ecosystem.config.js --update-env
     pm2 save
     pm2 status
 else
@@ -403,9 +439,15 @@ else
     echo -e "\${YELLOW}Nginx not installed. You can install it via 'sudo apt install -y nginx' or access ports 3000/3001 directly.\${NC}"
 fi
 
-# 4. Start services
+# 4. Sync Environment & Start services
+if [ -f "$DIR/.env" ]; then
+    cp -f "$DIR/.env" "$DIR/api/.env" 2>/dev/null || true
+elif [ -f "$DIR/api/.env" ]; then
+    cp -f "$DIR/api/.env" "$DIR/.env" 2>/dev/null || true
+fi
+
 echo -e "\${YELLOW}Starting Application Services with PM2...\${NC}"
-pm2 start ecosystem.config.js
+pm2 startOrReload ecosystem.config.js --update-env
 pm2 save
 
 echo -e "\${GREEN}====================================================\${NC}"
