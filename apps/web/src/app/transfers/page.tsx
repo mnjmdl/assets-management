@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import useSWR from 'swr';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -30,6 +30,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Download,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -372,6 +373,162 @@ export default function TransfersPage() {
     return filteredTransfers.slice((safePage - 1) * pageSize, safePage * pageSize);
   }, [filteredTransfers, safePage, pageSize]);
 
+  // Transfers Multi-Selection State
+  const [selectedTransferIds, setSelectedTransferIds] = useState<Set<string>>(new Set());
+  const [isBatchActionSubmitting, setIsBatchActionSubmitting] = useState(false);
+  const [batchSuccessBanner, setBatchSuccessBanner] = useState<string | null>(null);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
+  // Batch Approve/Reject Modal State
+  const [batchActionModal, setBatchActionModal] = useState<{
+    type: 'approve' | 'reject';
+    count: number;
+    notes: string;
+  } | null>(null);
+
+  // Clear selection on filter or tab change
+  useEffect(() => {
+    setSelectedTransferIds(new Set());
+  }, [statusTab, deptFilter, searchQuery]);
+
+  // Sync indeterminate state of master select-all checkbox
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate =
+        selectedTransferIds.size > 0 &&
+        selectedTransferIds.size < paginatedTransfers.length;
+    }
+  }, [selectedTransferIds, paginatedTransfers.length]);
+
+  const toggleSelectAll = () => {
+    if (paginatedTransfers.length === 0) return;
+    const allPageSelected = paginatedTransfers.every((t) =>
+      selectedTransferIds.has(t.id),
+    );
+    if (allPageSelected) {
+      setSelectedTransferIds((prev) => {
+        const next = new Set(prev);
+        paginatedTransfers.forEach((t) => next.delete(t.id));
+        return next;
+      });
+    } else {
+      setSelectedTransferIds((prev) => {
+        const next = new Set(prev);
+        paginatedTransfers.forEach((t) => next.add(t.id));
+        return next;
+      });
+    }
+  };
+
+  const toggleSelectTransfer = (id: string) => {
+    setSelectedTransferIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const selectedTransfers = useMemo(() => {
+    return transfers.filter((t) => selectedTransferIds.has(t.id));
+  }, [transfers, selectedTransferIds]);
+
+  const pendingSelectedTransfers = useMemo(() => {
+    return selectedTransfers.filter((t) => t.status === 'PENDING');
+  }, [selectedTransfers]);
+
+  const pendingSelectedCount = pendingSelectedTransfers.length;
+
+  const handleConfirmBatchAction = async () => {
+    if (!batchActionModal) return;
+    const targetTransfers = pendingSelectedTransfers;
+    if (targetTransfers.length === 0) return;
+
+    if (batchActionModal.type === 'reject' && !batchActionModal.notes.trim()) {
+      alert('A rejection reason is required.');
+      return;
+    }
+
+    setIsBatchActionSubmitting(true);
+    try {
+      const isApprove = batchActionModal.type === 'approve';
+      const promises = targetTransfers.map((item) =>
+        fetch(`/api/transfers/${item.id}/${isApprove ? 'approve' : 'reject'}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            isApprove
+              ? { notes: batchActionModal.notes }
+              : { rejectionReason: batchActionModal.notes.trim() },
+          ),
+        }).then(async (res) => {
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => ({}));
+            throw new Error(
+              errJson.message ||
+                `Failed to ${batchActionModal.type} transfer for ${item.asset?.assetCode || item.id}`,
+            );
+          }
+          return item.id;
+        }),
+      );
+
+      await Promise.all(promises);
+      setSelectedTransferIds(new Set());
+      setBatchActionModal(null);
+      await fetchTransfers();
+      setBatchSuccessBanner(
+        `Successfully ${isApprove ? 'approved' : 'rejected'} ${targetTransfers.length} transfer request(s).`,
+      );
+      setTimeout(() => setBatchSuccessBanner(null), 6000);
+    } catch (err: any) {
+      alert(err.message || `Error processing batch ${batchActionModal.type}`);
+    } finally {
+      setIsBatchActionSubmitting(false);
+    }
+  };
+
+  const handleExportSelectedTransfersToCsv = () => {
+    if (selectedTransfers.length === 0) return;
+    const headers = [
+      'Asset Code',
+      'Equipment Name',
+      'Category',
+      'Origin Dept',
+      'Target Dept',
+      'Status',
+      'Requested By',
+      'Requested Date',
+      'Reason',
+    ];
+    const rows = selectedTransfers.map((t) => [
+      `"${t.asset?.assetCode || ''}"`,
+      `"${(t.asset?.name || '').replace(/"/g, '""')}"`,
+      `"${t.asset?.category?.name || ''}"`,
+      `"${t.fromDept?.name || ''}"`,
+      `"${t.toDept?.name || ''}"`,
+      `"${t.status}"`,
+      `"${t.requestedBy?.name || ''}"`,
+      `"${t.requestedAt || ''}"`,
+      `"${(t.reason || t.notes || '').replace(/"/g, '""')}"`,
+    ]);
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute(
+      'download',
+      `transfers_export_${new Date().toISOString().slice(0, 10)}.csv`,
+    );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return;
     setPage(newPage);
@@ -662,52 +819,170 @@ export default function TransfersPage() {
           </div>
         </Card>
       ) : (
-        <Card className="overflow-hidden border bg-card shadow-sm">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/40 text-[11px]">
-                  <TableHead className="w-[120px]">Asset Code</TableHead>
-                  <TableHead>Equipment Details</TableHead>
-                  <TableHead>Transfer Route (Origin &rarr; Target)</TableHead>
-                  <TableHead>Reason &amp; Purpose</TableHead>
-                  <TableHead className="w-[110px]">Status</TableHead>
-                  <TableHead>Requested By</TableHead>
-                  <TableHead className="w-[150px] text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedTransfers.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
-                      <div className="space-y-1">
-                        <p className="text-xs font-semibold text-foreground">No Matching Transfers</p>
-                        <p className="text-[11px]">No requests match your active search and status filters.</p>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setSearchQuery('');
-                            setStatusTab('ALL');
-                            setDeptFilter('ALL');
-                          }}
-                          className="h-7 text-xs mt-2"
-                        >
-                          Clear Filters
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  paginatedTransfers.map((item) => {
-                    // Check if location info is encoded in notes: [TO_LOC:cmvx...:Location Name]
-                    const locMatch = item.notes?.match(/\[TO_LOC:([^:]+):([^\]]+)\]/);
-                    const targetLocName = locMatch ? locMatch[2] : null;
+        <div className="space-y-3">
+          {batchSuccessBanner && (
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 rounded-xl text-xs flex items-center justify-between gap-2 animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                <span>{batchSuccessBanner}</span>
+              </div>
+              <button
+                onClick={() => setBatchSuccessBanner(null)}
+                className="p-1 hover:bg-emerald-500/20 rounded text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
-                    return (
-                      <TableRow key={item.id} className="text-xs hover:bg-muted/30">
-                        {/* Asset Code */}
-                        <TableCell className="font-mono font-semibold text-primary">
+          {/* Top-Level Multiple Selection Batch Actions Bar */}
+          {selectedTransferIds.size > 0 && (
+            <div className="p-3 bg-primary/10 border border-primary/20 rounded-xl flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-top-1 shadow-xs">
+              <div className="flex items-center gap-2">
+                <Badge className="bg-primary text-primary-foreground font-bold text-xs px-2.5 py-0.5">
+                  {selectedTransferIds.size} Selected
+                </Badge>
+                <span className="text-xs text-muted-foreground hidden sm:inline">
+                  of {filteredTransfers.length} in view
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedTransferIds(new Set())}
+                  className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Clear
+                </Button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Batch Approve Button */}
+                <Button
+                  size="sm"
+                  disabled={isBatchActionSubmitting || pendingSelectedCount === 0}
+                  onClick={() =>
+                    setBatchActionModal({
+                      type: 'approve',
+                      count: pendingSelectedCount,
+                      notes: 'Bulk approved transfer requests.',
+                    })
+                  }
+                  className="h-8 gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-2xs"
+                  title={`Approve all selected pending transfer requests (${pendingSelectedCount})`}
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Approve All ({pendingSelectedCount})</span>
+                </Button>
+
+                {/* Batch Reject Button */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={isBatchActionSubmitting || pendingSelectedCount === 0}
+                  onClick={() =>
+                    setBatchActionModal({
+                      type: 'reject',
+                      count: pendingSelectedCount,
+                      notes: '',
+                    })
+                  }
+                  className="h-8 gap-1.5 text-xs text-destructive hover:bg-destructive/10 border-destructive/30 font-semibold shadow-2xs"
+                  title={`Reject all selected pending transfer requests (${pendingSelectedCount})`}
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Reject All ({pendingSelectedCount})</span>
+                </Button>
+
+                {/* Export Selected to CSV */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleExportSelectedTransfersToCsv}
+                  className="h-8 gap-1.5 text-xs shadow-2xs font-medium"
+                  title="Export selected transfer records to CSV"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export CSV</span>
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <Card className="overflow-hidden border bg-card shadow-sm">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/40 text-[11px]">
+                    <TableHead className="w-[40px] px-3">
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        checked={
+                          paginatedTransfers.length > 0 &&
+                          paginatedTransfers.every((t) => selectedTransferIds.has(t.id))
+                        }
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 rounded border-muted-foreground/30 text-primary focus:ring-primary/20 cursor-pointer accent-primary"
+                        aria-label="Select all transfers on this page"
+                      />
+                    </TableHead>
+                    <TableHead className="w-[120px]">Asset Code</TableHead>
+                    <TableHead>Equipment Details</TableHead>
+                    <TableHead>Transfer Route (Origin &rarr; Target)</TableHead>
+                    <TableHead>Reason &amp; Purpose</TableHead>
+                    <TableHead className="w-[110px]">Status</TableHead>
+                    <TableHead>Requested By</TableHead>
+                    <TableHead className="w-[150px] text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {paginatedTransfers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
+                        <div className="space-y-1">
+                          <p className="text-xs font-semibold text-foreground">No Matching Transfers</p>
+                          <p className="text-[11px]">No requests match your active search and status filters.</p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSearchQuery('');
+                              setStatusTab('ALL');
+                              setDeptFilter('ALL');
+                            }}
+                            className="h-7 text-xs mt-2"
+                          >
+                            Clear Filters
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    paginatedTransfers.map((item) => {
+                      // Check if location info is encoded in notes: [TO_LOC:cmvx...:Location Name]
+                      const locMatch = item.notes?.match(/\[TO_LOC:([^:]+):([^\]]+)\]/);
+                      const targetLocName = locMatch ? locMatch[2] : null;
+
+                      return (
+                        <TableRow
+                          key={item.id}
+                          className={`text-xs hover:bg-muted/30 transition-colors ${
+                            selectedTransferIds.has(item.id) ? 'bg-primary/5' : ''
+                          }`}
+                        >
+                          {/* Row Checkbox */}
+                          <TableCell className="w-[40px] px-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedTransferIds.has(item.id)}
+                              onChange={() => toggleSelectTransfer(item.id)}
+                              className="w-4 h-4 rounded border-muted-foreground/30 text-primary focus:ring-primary/20 cursor-pointer accent-primary"
+                              aria-label={`Select transfer for ${item.asset?.assetCode}`}
+                            />
+                          </TableCell>
+
+                          {/* Asset Code */}
+                          <TableCell className="font-mono font-semibold text-primary">
                           <Link
                             href={`/assets?code=${item.asset?.assetCode}`}
                             className="hover:underline flex items-center gap-1"
@@ -960,7 +1235,8 @@ export default function TransfersPage() {
             )}
           </div>
         </Card>
-      )}
+      </div>
+    )}
 
       {/* ─────────────────────────────────────────────────────────────
           MODAL: INITIATE ASSET TRANSFER
@@ -1269,6 +1545,130 @@ export default function TransfersPage() {
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     )}
                     <span>Confirm Rejection</span>
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────
+          MODAL: BATCH APPROVE / REJECT CONFIRMATION
+         ───────────────────────────────────────────────────────────── */}
+      {batchActionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in">
+          <div className="bg-card border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+            <div className="p-4 sm:p-5 border-b flex items-center justify-between bg-muted/20">
+              <div className="space-y-0.5">
+                <h3 className="font-bold text-base text-foreground flex items-center gap-1.5">
+                  {batchActionModal.type === 'approve' ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>Batch Approve Transfers</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-4 h-4 text-destructive" />
+                      <span>Batch Reject Transfers</span>
+                    </>
+                  )}
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  {batchActionModal.type === 'approve'
+                    ? `Approve ${batchActionModal.count} selected pending transfer request(s)`
+                    : `Reject ${batchActionModal.count} selected pending transfer request(s)`}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setBatchActionModal(null)}
+                className="h-8 w-8 text-muted-foreground"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+
+            <div className="p-4 sm:p-5 space-y-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-muted/30 border space-y-1">
+                <div className="flex items-center justify-between text-muted-foreground">
+                  <span>Selected Requests:</span>
+                  <strong className="text-foreground">
+                    {batchActionModal.count} pending transfer(s)
+                  </strong>
+                </div>
+                <div className="text-[11px] text-muted-foreground max-h-24 overflow-y-auto divide-y mt-1 pt-1 border-t">
+                  {pendingSelectedTransfers.slice(0, 6).map((t) => (
+                    <div key={t.id} className="py-1 flex items-center justify-between font-mono">
+                      <span className="font-semibold text-primary">{t.asset?.assetCode}</span>
+                      <span className="text-[10px] text-muted-foreground truncate max-w-[180px]">
+                        {t.asset?.name}
+                      </span>
+                    </div>
+                  ))}
+                  {batchActionModal.count > 6 && (
+                    <div className="pt-1 text-[10px] text-muted-foreground italic text-center">
+                      + {batchActionModal.count - 6} more assets
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="font-semibold text-foreground block">
+                  {batchActionModal.type === 'approve'
+                    ? 'Approval Notes (Optional)'
+                    : 'Rejection Reason (Mandatory)'}
+                </label>
+                <textarea
+                  className="w-full p-2.5 rounded-lg border bg-background text-xs text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 min-h-[70px]"
+                  placeholder={
+                    batchActionModal.type === 'approve'
+                      ? 'Add approval notes for all selected transfers...'
+                      : 'Provide justification why these transfers are rejected...'
+                  }
+                  value={batchActionModal.notes}
+                  onChange={(e) =>
+                    setBatchActionModal({ ...batchActionModal, notes: e.target.value })
+                  }
+                  autoFocus
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setBatchActionModal(null)}
+                  disabled={isBatchActionSubmitting}
+                >
+                  Cancel
+                </Button>
+                {batchActionModal.type === 'approve' ? (
+                  <Button
+                    size="sm"
+                    onClick={handleConfirmBatchAction}
+                    disabled={isBatchActionSubmitting}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1"
+                  >
+                    {isBatchActionSubmitting && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    <span>Approve All ({batchActionModal.count})</span>
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={handleConfirmBatchAction}
+                    disabled={isBatchActionSubmitting || !batchActionModal.notes.trim()}
+                    className="font-semibold gap-1"
+                  >
+                    {isBatchActionSubmitting && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    <span>Reject All ({batchActionModal.count})</span>
                   </Button>
                 )}
               </div>
