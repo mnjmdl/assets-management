@@ -436,6 +436,11 @@ export default function TransfersPage() {
     return transfers.filter((t) => selectedTransferIds.has(t.id));
   }, [transfers, selectedTransferIds]);
 
+  const allSelectedArePending = useMemo(() => {
+    if (selectedTransfers.length === 0) return false;
+    return selectedTransfers.every((t) => t.status === 'PENDING');
+  }, [selectedTransfers]);
+
   const pendingSelectedTransfers = useMemo(() => {
     return selectedTransfers.filter((t) => t.status === 'PENDING');
   }, [selectedTransfers]);
@@ -856,42 +861,47 @@ export default function TransfersPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {/* Batch Approve Button */}
-                <Button
-                  size="sm"
-                  disabled={isBatchActionSubmitting || pendingSelectedCount === 0}
-                  onClick={() =>
-                    setBatchActionModal({
-                      type: 'approve',
-                      count: pendingSelectedCount,
-                      notes: 'Bulk approved transfer requests.',
-                    })
-                  }
-                  className="h-8 gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-2xs"
-                  title={`Approve all selected pending transfer requests (${pendingSelectedCount})`}
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Approve All ({pendingSelectedCount})</span>
-                </Button>
+                {/* Only show Approve and Reject if ALL selected rows are PENDING */}
+                {allSelectedArePending && (
+                  <>
+                    {/* Batch Approve Button */}
+                    <Button
+                      size="sm"
+                      disabled={isBatchActionSubmitting}
+                      onClick={() =>
+                        setBatchActionModal({
+                          type: 'approve',
+                          count: selectedTransferIds.size,
+                          notes: 'Bulk approved transfer requests.',
+                        })
+                      }
+                      className="h-8 gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-2xs animate-in fade-in zoom-in-95"
+                      title={`Approve all ${selectedTransferIds.size} selected pending transfer requests`}
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Approve All ({selectedTransferIds.size})</span>
+                    </Button>
 
-                {/* Batch Reject Button */}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={isBatchActionSubmitting || pendingSelectedCount === 0}
-                  onClick={() =>
-                    setBatchActionModal({
-                      type: 'reject',
-                      count: pendingSelectedCount,
-                      notes: '',
-                    })
-                  }
-                  className="h-8 gap-1.5 text-xs text-destructive hover:bg-destructive/10 border-destructive/30 font-semibold shadow-2xs"
-                  title={`Reject all selected pending transfer requests (${pendingSelectedCount})`}
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Reject All ({pendingSelectedCount})</span>
-                </Button>
+                    {/* Batch Reject Button */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={isBatchActionSubmitting}
+                      onClick={() =>
+                        setBatchActionModal({
+                          type: 'reject',
+                          count: selectedTransferIds.size,
+                          notes: '',
+                        })
+                      }
+                      className="h-8 gap-1.5 text-xs text-destructive hover:bg-destructive/10 border-destructive/30 font-semibold shadow-2xs animate-in fade-in zoom-in-95"
+                      title={`Reject all ${selectedTransferIds.size} selected pending transfer requests`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Reject All ({selectedTransferIds.size})</span>
+                    </Button>
+                  </>
+                )}
 
                 {/* Export Selected to CSV */}
                 <Button
