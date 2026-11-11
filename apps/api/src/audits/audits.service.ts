@@ -998,6 +998,109 @@ export class AuditsService {
     return { success: true };
   }
 
+  async batchUpdateItems(
+    sessionId: string,
+    itemIds: string[],
+    action: 'MARK_MISSING' | 'MARK_VERIFIED' | 'RESET_PENDING',
+    userId?: string,
+    notes?: string,
+  ) {
+    if (!itemIds || itemIds.length === 0) {
+      return { success: true, count: 0 };
+    }
+
+    const items = await this.prisma.auditItem.findMany({
+      where: {
+        id: { in: itemIds },
+        sessionId,
+      },
+      include: {
+        session: { include: { location: true } },
+        asset: true,
+      },
+    });
+
+    if (items.length === 0) {
+      return { success: true, count: 0 };
+    }
+
+    if (action === 'MARK_MISSING') {
+      for (const item of items) {
+        await this.prisma.auditItem.update({
+          where: { id: item.id },
+          data: {
+            status: 'MISSING',
+            notes: notes || 'Batch marked as MISSING during review',
+          },
+        });
+
+        const existingDiscrepancy = await this.prisma.auditDiscrepancy.findUnique({
+          where: { auditItemId: item.id },
+        });
+
+        if (!existingDiscrepancy) {
+          await this.prisma.auditDiscrepancy.create({
+            data: {
+              sessionId: item.sessionId,
+              assetId: item.assetId,
+              auditItemId: item.id,
+              discrepancyType: 'MISSING',
+              description: `Asset "${item.asset?.assetCode || item.assetId}" batch flagged as MISSING`,
+            },
+          });
+        }
+      }
+    } else if (action === 'MARK_VERIFIED') {
+      for (const item of items) {
+        await this.prisma.auditItem.update({
+          where: { id: item.id },
+          data: {
+            status: 'VERIFIED',
+            scannedAt: new Date(),
+            foundLocationId: item.expectedLocationId || item.foundLocationId,
+            notes: notes || 'Batch verified by manager review',
+          },
+        });
+
+        const existingDiscrepancy = await this.prisma.auditDiscrepancy.findUnique({
+          where: { auditItemId: item.id },
+        });
+        if (existingDiscrepancy && !existingDiscrepancy.resolvedAt) {
+          await this.prisma.auditDiscrepancy.update({
+            where: { id: existingDiscrepancy.id },
+            data: {
+              resolvedAt: new Date(),
+              resolvedById: userId || 'admin',
+              resolutionNotes: notes || 'Resolved via batch verification',
+            },
+          });
+        }
+      }
+    } else if (action === 'RESET_PENDING') {
+      for (const item of items) {
+        await this.prisma.auditItem.update({
+          where: { id: item.id },
+          data: {
+            status: 'PENDING',
+            scannedAt: null,
+            notes: null,
+          },
+        });
+
+        await this.prisma.auditDiscrepancy.deleteMany({
+          where: { auditItemId: item.id, resolvedAt: null },
+        });
+      }
+    }
+
+    this.invalidateSessionsCache();
+    return {
+      success: true,
+      count: items.length,
+      action,
+    };
+  }
+
   async reopenSession(id: string) {
     const session = await this.prisma.auditSession.findUnique({ where: { id } });
     if (!session) {

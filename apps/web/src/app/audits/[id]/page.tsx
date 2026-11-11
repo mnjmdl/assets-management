@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import useSWR from 'swr';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -39,6 +39,7 @@ import {
   ExternalLink,
   PanelLeftClose,
   PanelLeftOpen,
+  Download,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -309,6 +310,148 @@ export default function AuditPlanDetailPage() {
     }
     return true;
   });
+
+  // Checklist Multi-Selection State
+  const [selectedChecklistIds, setSelectedChecklistIds] = useState<Set<string>>(new Set());
+  const [isBatchUpdating, setIsBatchUpdating] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
+  // Clear selection when session changes
+  useEffect(() => {
+    setSelectedChecklistIds(new Set());
+  }, [selectedSessionId]);
+
+  // Sync indeterminate state of master select-all checkbox
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate =
+        selectedChecklistIds.size > 0 &&
+        selectedChecklistIds.size < filteredSessionItems.length;
+    }
+  }, [selectedChecklistIds, filteredSessionItems.length]);
+
+  const toggleSelectAll = () => {
+    if (filteredSessionItems.length === 0) return;
+    const allFilteredSelected = filteredSessionItems.every((i) =>
+      selectedChecklistIds.has(i.id),
+    );
+    if (allFilteredSelected) {
+      setSelectedChecklistIds((prev) => {
+        const next = new Set(prev);
+        filteredSessionItems.forEach((i) => next.delete(i.id));
+        return next;
+      });
+    } else {
+      setSelectedChecklistIds((prev) => {
+        const next = new Set(prev);
+        filteredSessionItems.forEach((i) => next.add(i.id));
+        return next;
+      });
+    }
+  };
+
+  const toggleSelectItem = (id: string) => {
+    setSelectedChecklistIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleBatchAction = async (
+    action: 'MARK_MISSING' | 'MARK_VERIFIED' | 'RESET_PENDING',
+  ) => {
+    if (!selectedSessionId || selectedChecklistIds.size === 0) return;
+
+    const actionLabel =
+      action === 'MARK_MISSING'
+        ? 'MISSING'
+        : action === 'MARK_VERIFIED'
+          ? 'VERIFIED'
+          : 'PENDING';
+
+    if (
+      !confirm(
+        `Are you sure you want to batch update ${selectedChecklistIds.size} selected asset(s) to ${actionLabel}?`,
+      )
+    ) {
+      return;
+    }
+
+    setIsBatchUpdating(true);
+    try {
+      const res = await fetch(`/api/audits/sessions/${selectedSessionId}/items/batch`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemIds: Array.from(selectedChecklistIds),
+          action,
+          notes: `Batch updated to ${actionLabel} from Session Inventory Checklist`,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Failed to update selected items');
+      }
+
+      await fetchPlanDetails();
+      await mutateSessionItems();
+      const updatedCount = selectedChecklistIds.size;
+      setSelectedChecklistIds(new Set());
+      setTransferSuccessBanner(
+        `Batch updated ${updatedCount} asset(s) to ${actionLabel} successfully.`,
+      );
+      setTimeout(() => setTransferSuccessBanner(null), 6000);
+    } catch (e: any) {
+      alert(e.message || 'Error processing batch action');
+    } finally {
+      setIsBatchUpdating(false);
+    }
+  };
+
+  const handleExportSelectedToCsv = () => {
+    if (selectedChecklistIds.size === 0 || !selectedSessionId) return;
+    const selectedItems = sessionItems.filter((i) => selectedChecklistIds.has(i.id));
+    if (selectedItems.length === 0) return;
+
+    const headers = [
+      'Asset Code',
+      'Asset Name',
+      'Model',
+      'Expected Location',
+      'Physical Location',
+      'Status',
+      'Condition',
+    ];
+    const rows = selectedItems.map((i) => [
+      `"${i.asset.assetCode}"`,
+      `"${(i.asset.name || '').replace(/"/g, '""')}"`,
+      `"${(i.asset.model || '').replace(/"/g, '""')}"`,
+      `"${(i.expectedLocation?.name || 'Unassigned').replace(/"/g, '""')}"`,
+      `"${(i.foundLocation?.name || 'Not scanned yet').replace(/"/g, '""')}"`,
+      `"${i.status}"`,
+      `"${i.condition || '-'}"`,
+    ]);
+
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute(
+      'download',
+      `Session-Selected-Assets-${selectedSessionId.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv`,
+    );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const totalChecklistPages = Math.max(
     1,
@@ -1268,48 +1411,152 @@ export default function AuditPlanDetailPage() {
               </p>
             </Card>
           ) : (
-            <Card className="overflow-hidden border bg-card">
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/40 text-[11px]">
-                      <TableHead className="w-[135px] min-w-[125px]">Asset Code</TableHead>
-                      <TableHead>Asset Name</TableHead>
-                      <TableHead className="w-[120px]">Expected Location</TableHead>
-                      <TableHead className="w-[120px]">Physical Location</TableHead>
-                      <TableHead className="w-[90px]">Audit Status</TableHead>
-                      <TableHead className="w-[90px]">Condition</TableHead>
-                      <TableHead className="w-[110px] text-right">Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredSessionItems.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                          <div className="space-y-1">
-                            <p className="text-xs font-semibold text-foreground">No matching assets found</p>
-                            <p className="text-[11px]">Try adjusting your search query or status filter.</p>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setChecklistSearch('');
-                                setChecklistStatusFilter('ALL');
-                                setChecklistPage(1);
-                              }}
-                              className="h-7 text-xs mt-2"
-                            >
-                              Clear Filter
-                            </Button>
-                          </div>
-                        </TableCell>
+            <div className="space-y-3">
+              {/* Top-Level Multiple Selection Batch Actions Bar */}
+              {selectedChecklistIds.size > 0 && (
+                <div className="p-3 bg-primary/10 border border-primary/20 rounded-xl flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-top-1 shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-primary text-primary-foreground font-bold text-xs px-2.5 py-0.5">
+                      {selectedChecklistIds.size} Selected
+                    </Badge>
+                    <span className="text-xs text-muted-foreground hidden sm:inline">
+                      of {filteredSessionItems.length} in view
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelectedChecklistIds(new Set())}
+                      className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      Clear
+                    </Button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Batch Mark as MISSING */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={isBatchUpdating}
+                      onClick={() => handleBatchAction('MARK_MISSING')}
+                      className="h-8 gap-1.5 text-xs text-amber-700 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/10 font-semibold shadow-2xs"
+                      title="Mark all selected assets as MISSING"
+                    >
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Mark MISSING ({selectedChecklistIds.size})</span>
+                    </Button>
+
+                    {/* Batch Mark as VERIFIED */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={isBatchUpdating}
+                      onClick={() => handleBatchAction('MARK_VERIFIED')}
+                      className="h-8 gap-1.5 text-xs text-emerald-700 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 font-semibold shadow-2xs"
+                      title="Manually mark all selected assets as VERIFIED"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Mark VERIFIED</span>
+                    </Button>
+
+                    {/* Batch Reset to PENDING */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={isBatchUpdating}
+                      onClick={() => handleBatchAction('RESET_PENDING')}
+                      className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground shadow-2xs"
+                      title="Reset all selected assets back to PENDING"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset Status</span>
+                    </Button>
+
+                    {/* Export Selected to CSV */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleExportSelectedToCsv}
+                      className="h-8 gap-1.5 text-xs shadow-2xs font-medium"
+                      title="Export selected asset checklist items to CSV"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export CSV</span>
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <Card className="overflow-hidden border bg-card">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40 text-[11px]">
+                        <TableHead className="w-[42px] px-3">
+                          <input
+                            ref={selectAllRef}
+                            type="checkbox"
+                            id="selectAllChecklistItems"
+                            aria-label="Select all assets in this checklist"
+                            checked={
+                              filteredSessionItems.length > 0 &&
+                              filteredSessionItems.every((i) => selectedChecklistIds.has(i.id))
+                            }
+                            onChange={toggleSelectAll}
+                            className="h-4 w-4 rounded border-muted-foreground/40 text-primary accent-primary cursor-pointer align-middle"
+                          />
+                        </TableHead>
+                        <TableHead className="w-[135px] min-w-[125px]">Asset Code</TableHead>
+                        <TableHead>Asset Name</TableHead>
+                        <TableHead className="w-[120px]">Expected Location</TableHead>
+                        <TableHead className="w-[120px]">Physical Location</TableHead>
+                        <TableHead className="w-[90px]">Audit Status</TableHead>
+                        <TableHead className="w-[90px]">Condition</TableHead>
+                        <TableHead className="w-[110px] text-right">Action</TableHead>
                       </TableRow>
-                    ) : (
-                      paginatedSessionItems.map((item) => (
-                        <TableRow key={item.id} className="text-xs hover:bg-muted/30">
-                          <TableCell className="font-mono font-semibold text-primary whitespace-nowrap">
-                            {item.asset.assetCode}
+                    </TableHeader>
+                    <TableBody>
+                      {filteredSessionItems.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                            <div className="space-y-1">
+                              <p className="text-xs font-semibold text-foreground">No matching assets found</p>
+                              <p className="text-[11px]">Try adjusting your search query or status filter.</p>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setChecklistSearch('');
+                                  setChecklistStatusFilter('ALL');
+                                  setChecklistPage(1);
+                                }}
+                                className="h-7 text-xs mt-2"
+                              >
+                                Clear Filter
+                              </Button>
+                            </div>
                           </TableCell>
+                        </TableRow>
+                      ) : (
+                        paginatedSessionItems.map((item) => (
+                          <TableRow
+                            key={item.id}
+                            className={`text-xs hover:bg-muted/30 transition-colors ${
+                              selectedChecklistIds.has(item.id) ? 'bg-primary/5 dark:bg-primary/10' : ''
+                            }`}
+                          >
+                            <TableCell className="px-3">
+                              <input
+                                type="checkbox"
+                                aria-label={`Select asset ${item.asset.assetCode}`}
+                                checked={selectedChecklistIds.has(item.id)}
+                                onChange={() => toggleSelectItem(item.id)}
+                                className="h-4 w-4 rounded border-muted-foreground/40 text-primary accent-primary cursor-pointer align-middle"
+                              />
+                            </TableCell>
+                            <TableCell className="font-mono font-semibold text-primary whitespace-nowrap">
+                              {item.asset.assetCode}
+                            </TableCell>
                           <TableCell>
                             <div className="font-medium">{item.asset.name}</div>
                             {item.asset.model && (
@@ -1567,9 +1814,10 @@ export default function AuditPlanDetailPage() {
                 </div>
               )}
             </Card>
-          )}
-        </div>
+          </div>
+        )}
       </div>
+    </div>
 
       {/* Start New Session Modal */}
       {isSessionModalOpen && (

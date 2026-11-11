@@ -110,6 +110,27 @@ export class AuditsController {
     return this.auditsService.markItemMissing(itemId, user?.id || 'admin', body?.notes);
   }
 
+  @Put('sessions/:sessionId/items/batch')
+  @ApiOperation({ summary: 'Batch update status for multiple audit items' })
+  batchUpdateItems(
+    @Param('sessionId') sessionId: string,
+    @Body()
+    body: {
+      itemIds: string[];
+      action: 'MARK_MISSING' | 'MARK_VERIFIED' | 'RESET_PENDING';
+      notes?: string;
+    },
+    @CurrentUser() user: any,
+  ) {
+    return this.auditsService.batchUpdateItems(
+      sessionId,
+      body.itemIds,
+      body.action,
+      user?.id || 'admin',
+      body?.notes,
+    );
+  }
+
   @Put('discrepancies/:id/approve-lost')
   @ApiOperation({ summary: 'Manager approval: confirm missing asset and mark as LOST in master registry' })
   approveMissingAsLost(
