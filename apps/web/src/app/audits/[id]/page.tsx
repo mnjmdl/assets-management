@@ -223,7 +223,7 @@ export default function AuditPlanDetailPage() {
       : [];
 
   // Transfer Generation Modal State
-  const [transferModalItem, setTransferModalItem] = useState<AuditItem | null>(null);
+  const [transferModalItems, setTransferModalItems] = useState<AuditItem[] | null>(null);
   const [transferReason, setTransferReason] = useState<string>('');
   const [isGeneratingTransfer, setIsGeneratingTransfer] = useState(false);
   const [transferFormError, setTransferFormError] = useState<string | null>(null);
@@ -237,51 +237,84 @@ export default function AuditPlanDetailPage() {
     );
   };
 
-  const handleOpenTransferModal = (item: AuditItem) => {
-    setTransferModalItem(item);
+  const handleOpenTransferModal = (itemOrItems: AuditItem | AuditItem[]) => {
+    const items = Array.isArray(itemOrItems) ? itemOrItems : [itemOrItems];
+    if (items.length === 0) return;
+    setTransferModalItems(items);
     setTransferFormError(null);
-    const fromName = item.expectedLocation?.name || 'Unassigned Location';
-    const toName = item.foundLocation?.name || 'Current Station';
-    setTransferReason(
-      `Audit relocation: Asset ${item.asset.assetCode} physically found at ${toName} (previously assigned to ${fromName})`,
-    );
+    if (items.length === 1) {
+      const item = items[0];
+      const fromName = item.expectedLocation?.name || 'Unassigned Location';
+      const toName = item.foundLocation?.name || 'Current Station';
+      setTransferReason(
+        `Audit relocation: Asset ${item.asset.assetCode} physically found at ${toName} (previously assigned to ${fromName})`,
+      );
+    } else {
+      setTransferReason(
+        `Audit relocation: Batch transfer for ${items.length} relocated assets physically found during audit session`,
+      );
+    }
   };
 
   const handleConfirmTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!transferModalItem || !transferModalItem.foundLocation) return;
+    if (!transferModalItems || transferModalItems.length === 0) return;
 
     setIsGeneratingTransfer(true);
     setTransferFormError(null);
 
     try {
-      const res = await fetch('/api/transfers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assetId: transferModalItem.asset.id,
-          toLocationId: transferModalItem.foundLocation.id,
-          reason: transferReason.trim(),
-        }),
-      });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson?.message || 'Failed to generate transfer request');
+      const validItems = transferModalItems.filter((i) => Boolean(i.foundLocation));
+      if (validItems.length === 0) {
+        throw new Error('None of the selected assets have a detected physical location');
       }
 
-      setGeneratedTransferAssetIds((prev) => new Set(prev).add(transferModalItem.asset.id));
-      await mutateTransfers();
-
-      const fromName = transferModalItem.expectedLocation?.name || 'Previous Location';
-      const toName = transferModalItem.foundLocation?.name || 'Current Location';
-
-      setTransferSuccessBanner(
-        `Location transfer request generated for ${transferModalItem.asset.assetCode} (${fromName} → ${toName})! It is now pending approval.`,
+      const promises = validItems.map((item) =>
+        fetch('/api/transfers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            assetId: item.asset.id,
+            toLocationId: item.foundLocation!.id,
+            reason: transferReason.trim(),
+          }),
+        }).then(async (res) => {
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => ({}));
+            throw new Error(
+              errJson?.message || `Failed to generate transfer for ${item.asset.assetCode}`,
+            );
+          }
+          return item.asset.id;
+        }),
       );
+
+      const transferredAssetIds = await Promise.all(promises);
+
+      setGeneratedTransferAssetIds((prev) => {
+        const next = new Set(prev);
+        transferredAssetIds.forEach((id) => next.add(id));
+        return next;
+      });
+
+      await mutateTransfers();
+      setSelectedChecklistIds(new Set());
+
+      if (validItems.length === 1) {
+        const item = validItems[0];
+        const fromName = item.expectedLocation?.name || 'Previous Location';
+        const toName = item.foundLocation?.name || 'Current Location';
+        setTransferSuccessBanner(
+          `Location transfer request generated for ${item.asset.assetCode} (${fromName} → ${toName})! It is now pending approval in Transfers.`,
+        );
+      } else {
+        setTransferSuccessBanner(
+          `Batch transfer requests generated for ${validItems.length} relocated assets! They are now pending approval in Transfers.`,
+        );
+      }
       setTimeout(() => setTransferSuccessBanner(null), 8000);
 
-      setTransferModalItem(null);
+      setTransferModalItems(null);
     } catch (err: any) {
       setTransferFormError(err.message || 'Could not generate transfer');
     } finally {
@@ -361,6 +394,31 @@ export default function AuditPlanDetailPage() {
       return next;
     });
   };
+
+  const isMismatchItem = (item: AuditItem) => {
+    return (
+      item.status === 'MISMATCH' ||
+      item.status === 'LOCATION_MISMATCH' ||
+      Boolean(
+        item.expectedLocation &&
+        item.foundLocation &&
+        item.expectedLocation.id !== item.foundLocation.id,
+      )
+    );
+  };
+
+  const selectedItems = useMemo(() => {
+    return sessionItems.filter((i) => selectedChecklistIds.has(i.id));
+  }, [sessionItems, selectedChecklistIds]);
+
+  const allSelectedAreMismatch = useMemo(() => {
+    if (selectedItems.length === 0) return false;
+    return selectedItems.every(isMismatchItem);
+  }, [selectedItems]);
+
+  const pendingTransferSelectedCount = useMemo(() => {
+    return selectedItems.filter((i) => getPendingTransferForAsset(i.asset.id)).length;
+  }, [selectedItems, generatedTransferAssetIds, pendingTransfers]);
 
   const handleBatchAction = async (
     action: 'MARK_MISSING' | 'MARK_VERIFIED' | 'RESET_PENDING',
@@ -1433,6 +1491,42 @@ export default function AuditPlanDetailPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    {/* Transfer Button when all selected are mismatch */}
+                    {allSelectedAreMismatch && (
+                      <>
+                        {pendingTransferSelectedCount === selectedItems.length ? (
+                          <Badge
+                            variant="outline"
+                            className="h-8 px-2.5 text-xs gap-1.5 border-blue-400 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 font-medium shadow-2xs"
+                            title="All selected mismatch assets already have transfer requests pending approval"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                            <span>Transfers Pending ({selectedChecklistIds.size})</span>
+                          </Badge>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={isGeneratingTransfer || isBatchUpdating}
+                            onClick={() =>
+                              handleOpenTransferModal(
+                                selectedItems.filter(
+                                  (i) =>
+                                    isMismatchItem(i) &&
+                                    !getPendingTransferForAsset(i.asset.id),
+                                ),
+                              )
+                            }
+                            className="h-8 gap-1.5 text-xs border-amber-400 text-amber-800 bg-amber-50 hover:bg-amber-100 hover:text-amber-900 shadow-2xs font-bold dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-700 animate-in fade-in zoom-in-95"
+                            title={`Generate location transfer request(s) for ${selectedChecklistIds.size} relocated asset(s)`}
+                          >
+                            <ArrowLeftRight className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                            <span>Transfer ({selectedChecklistIds.size})</span>
+                          </Button>
+                        )}
+                      </>
+                    )}
+
                     {/* Batch Mark as MISSING */}
                     <Button
                       size="sm"
@@ -1958,21 +2052,27 @@ export default function AuditPlanDetailPage() {
       )}
 
       {/* Location Transfer Generation Modal */}
-      {transferModalItem && (
+      {transferModalItems && transferModalItems.length > 0 && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
           <div className="bg-card w-full max-w-lg rounded-xl shadow-2xl border p-5 sm:p-6 space-y-4">
             <div className="flex items-start justify-between gap-3 border-b pb-3">
               <div className="space-y-0.5">
                 <h3 className="font-bold text-base flex items-center gap-2 text-foreground">
                   <ArrowLeftRight className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                  <span>Generate Location Transfer</span>
+                  <span>
+                    {transferModalItems.length === 1
+                      ? 'Generate Location Transfer'
+                      : `Generate Batch Transfers (${transferModalItems.length})`}
+                  </span>
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Relocate asset to verified physical station based on audit findings
+                  {transferModalItems.length === 1
+                    ? 'Relocate asset to verified physical station based on audit findings'
+                    : `Relocate ${transferModalItems.length} assets to their verified physical stations based on audit findings`}
                 </p>
               </div>
               <button
-                onClick={() => setTransferModalItem(null)}
+                onClick={() => setTransferModalItems(null)}
                 className="p-1 rounded-md text-muted-foreground hover:bg-muted"
               >
                 <X className="w-4 h-4" />
@@ -1987,55 +2087,102 @@ export default function AuditPlanDetailPage() {
             )}
 
             <form onSubmit={handleConfirmTransfer} className="space-y-4 text-xs">
-              {/* Asset Details Box */}
-              <div className="p-3 bg-muted/40 border rounded-lg space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono font-bold text-sm text-foreground">
-                    {transferModalItem.asset.assetCode}
-                  </span>
-                  <Badge variant="outline" className="text-[10px] font-mono">
-                    {transferModalItem.asset.model || 'Equipment'}
-                  </Badge>
-                </div>
-                <div className="text-foreground font-medium text-xs">
-                  {transferModalItem.asset.name}
-                </div>
-              </div>
-
-              {/* Transfer Route: Previous Location -> Current Location */}
-              <div className="grid grid-cols-2 gap-3 p-3 bg-accent/30 border rounded-lg">
-                <div className="space-y-1">
-                  <span className="text-[11px] font-semibold text-muted-foreground block">
-                    Previous Location (From)
-                  </span>
-                  <div className="font-medium text-foreground flex items-center gap-1.5">
-                    <Building className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                    <span className="truncate">
-                      {transferModalItem.expectedLocation?.name || 'Unassigned'}
-                    </span>
+              {transferModalItems.length === 1 ? (
+                <>
+                  {/* Asset Details Box */}
+                  <div className="p-3 bg-muted/40 border rounded-lg space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono font-bold text-sm text-foreground">
+                        {transferModalItems[0].asset.assetCode}
+                      </span>
+                      <Badge variant="outline" className="text-[10px] font-mono">
+                        {transferModalItems[0].asset.model || 'Equipment'}
+                      </Badge>
+                    </div>
+                    <div className="text-foreground font-medium text-xs">
+                      {transferModalItems[0].asset.name}
+                    </div>
                   </div>
-                  {transferModalItem.expectedLocation?.code && (
-                    <span className="text-[10px] font-mono text-muted-foreground block">
-                      Code: {transferModalItem.expectedLocation.code}
-                    </span>
-                  )}
-                </div>
 
-                <div className="space-y-1 border-l pl-3 border-border">
-                  <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 block flex items-center gap-1">
-                    <MapPin className="w-3.5 h-3.5" />
-                    <span>Current Location (To)</span>
-                  </span>
-                  <div className="font-bold text-foreground truncate">
-                    {transferModalItem.foundLocation?.name || 'Current Station'}
+                  {/* Transfer Route: Previous Location -> Current Location */}
+                  <div className="grid grid-cols-2 gap-3 p-3 bg-accent/30 border rounded-lg">
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-semibold text-muted-foreground block">
+                        Previous Location (From)
+                      </span>
+                      <div className="font-medium text-foreground flex items-center gap-1.5">
+                        <Building className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                        <span className="truncate">
+                          {transferModalItems[0].expectedLocation?.name || 'Unassigned'}
+                        </span>
+                      </div>
+                      {transferModalItems[0].expectedLocation?.code && (
+                        <span className="text-[10px] font-mono text-muted-foreground block">
+                          Code: {transferModalItems[0].expectedLocation.code}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-1 border-l pl-3 border-border">
+                      <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 block flex items-center gap-1">
+                        <MapPin className="w-3.5 h-3.5" />
+                        <span>Current Location (To)</span>
+                      </span>
+                      <div className="font-bold text-foreground truncate">
+                        {transferModalItems[0].foundLocation?.name || 'Current Station'}
+                      </div>
+                      {transferModalItems[0].foundLocation?.code && (
+                        <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 block">
+                          Code: {transferModalItems[0].foundLocation.code}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  {transferModalItem.foundLocation?.code && (
-                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 block">
-                      Code: {transferModalItem.foundLocation.code}
-                    </span>
-                  )}
-                </div>
-              </div>
+                </>
+              ) : (
+                <>
+                  {/* Batch Relocated Assets Preview List */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span className="font-semibold text-foreground">
+                        Relocated Assets ({transferModalItems.length})
+                      </span>
+                      <span>Routing to physical station</span>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto rounded-lg border divide-y bg-muted/20">
+                      {transferModalItems.map((item) => (
+                        <div
+                          key={item.id}
+                          className="p-2.5 flex items-center justify-between gap-3 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-bold text-foreground">
+                                {item.asset.assetCode}
+                              </span>
+                              <span className="text-muted-foreground truncate">
+                                {item.asset.name}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-0.5">
+                              <span className="truncate">
+                                {item.expectedLocation?.name || 'Unassigned'}
+                              </span>
+                              <ArrowLeftRight className="w-3 h-3 text-amber-500 shrink-0" />
+                              <span className="font-medium text-emerald-600 dark:text-emerald-400 truncate">
+                                {item.foundLocation?.name || 'Current Station'}
+                              </span>
+                            </div>
+                          </div>
+                          <Badge variant="outline" className="text-[10px] shrink-0 font-mono">
+                            {item.asset.model || 'Equipment'}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Transfer Reason */}
               <div className="space-y-1.5">
@@ -2060,7 +2207,7 @@ export default function AuditPlanDetailPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setTransferModalItem(null)}
+                  onClick={() => setTransferModalItems(null)}
                 >
                   Cancel
                 </Button>
@@ -2078,7 +2225,11 @@ export default function AuditPlanDetailPage() {
                   ) : (
                     <>
                       <ArrowLeftRight className="w-4 h-4" />
-                      <span>Transfer</span>
+                      <span>
+                        {transferModalItems.length === 1
+                          ? 'Generate Transfer'
+                          : `Generate ${transferModalItems.length} Transfers`}
+                      </span>
                     </>
                   )}
                 </Button>
