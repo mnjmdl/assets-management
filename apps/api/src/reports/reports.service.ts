@@ -83,6 +83,8 @@ export class ReportsService {
     planId?: string;
     status?: string;
     locationId?: string;
+    category?: string;
+    categoryId?: string;
   }) {
     const whereSession: Record<string, any> = {};
     if (filter.planId) whereSession.planId = filter.planId;
@@ -96,7 +98,16 @@ export class ReportsService {
       whereItem.session = whereSession;
     }
 
-    const [allPlans, items] = await Promise.all([
+    if (filter.categoryId && filter.categoryId !== 'ALL') {
+      whereItem.asset = { ...whereItem.asset, categoryId: filter.categoryId };
+    } else if (filter.category && filter.category !== 'ALL') {
+      whereItem.asset = {
+        ...whereItem.asset,
+        category: { name: filter.category },
+      };
+    }
+
+    const [allPlans, allCategories, items] = await Promise.all([
       this.prisma.auditPlan.findMany({
         select: {
           id: true,
@@ -107,6 +118,11 @@ export class ReportsService {
           _count: { select: { sessions: true } },
         },
         orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.assetCategory.findMany({
+        where: { isActive: true },
+        select: { id: true, name: true, code: true },
+        orderBy: { name: 'asc' },
       }),
       this.prisma.auditItem.findMany({
         where: whereItem,
@@ -211,6 +227,7 @@ export class ReportsService {
         complianceRate,
       },
       plans: allPlans,
+      categories: allCategories,
       items: resolvedItems.map((i) => ({
         id: i.id,
         planId: i.session.plan.id,
@@ -245,6 +262,8 @@ export class ReportsService {
     planId?: string;
     status?: string;
     locationId?: string;
+    category?: string;
+    categoryId?: string;
   }): Promise<Buffer> {
     const report = await this.auditStatusReport(filter);
 

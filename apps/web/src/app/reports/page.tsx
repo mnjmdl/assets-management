@@ -30,6 +30,7 @@ import {
   X,
   ExternalLink,
   Loader2,
+  Tags,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -105,6 +106,7 @@ export default function AuditReportsPage() {
   const [selectedPlanId, setSelectedPlanId] = useState<string>(initialPlanId);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [conditionFilter, setConditionFilter] = useState<string>('ALL');
+  const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Pagination States
@@ -115,8 +117,9 @@ export default function AuditReportsPage() {
     const params = new URLSearchParams();
     if (selectedPlanId) params.append('planId', selectedPlanId);
     if (statusFilter !== 'ALL') params.append('status', statusFilter);
+    if (categoryFilter !== 'ALL') params.append('category', categoryFilter);
     return params.toString();
-  }, [selectedPlanId, statusFilter]);
+  }, [selectedPlanId, statusFilter, categoryFilter]);
 
   const {
     data: rawReport,
@@ -129,6 +132,17 @@ export default function AuditReportsPage() {
   const summary: AuditReportSummary | null = payload.summary || null;
   const items: AuditReportItem[] = Array.isArray(payload.items) ? payload.items : [];
   const plans: PlanOption[] = Array.isArray(payload.plans) ? payload.plans : [];
+
+  const categoryOptions = useMemo(() => {
+    const fromBackend: string[] = Array.isArray(payload.categories)
+      ? payload.categories.map((c: any) => c.name)
+      : [];
+    const fromItems: string[] = items
+      .map((i) => i.category)
+      .filter((c) => Boolean(c) && c !== '-');
+    return Array.from(new Set([...fromBackend, ...fromItems])).sort();
+  }, [payload.categories, items]);
+
   const loading = reportLoading && !rawReport;
   const error = reportError ? reportError.message || 'Could not load audit report data.' : null;
 
@@ -143,6 +157,7 @@ export default function AuditReportsPage() {
       const params = new URLSearchParams();
       if (selectedPlanId) params.append('planId', selectedPlanId);
       if (statusFilter !== 'ALL') params.append('status', statusFilter);
+      if (categoryFilter !== 'ALL') params.append('category', categoryFilter);
 
       const url = `/api/reports/audits/export${params.toString() ? `?${params.toString()}` : ''}`;
       const res = await fetch(url);
@@ -167,10 +182,13 @@ export default function AuditReportsPage() {
     }
   };
 
-  // Filter items in memory by search query and condition filter
+  // Filter items in memory by search query, category, and condition filter
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
       if (conditionFilter !== 'ALL' && item.condition !== conditionFilter) {
+        return false;
+      }
+      if (categoryFilter !== 'ALL' && item.category !== categoryFilter) {
         return false;
       }
       if (searchQuery.trim()) {
@@ -178,6 +196,7 @@ export default function AuditReportsPage() {
         const matchCode = item.assetCode.toLowerCase().includes(q);
         const matchSap = item.sapAssetCode?.toLowerCase().includes(q);
         const matchName = item.assetName.toLowerCase().includes(q);
+        const matchCategory = item.category?.toLowerCase().includes(q);
         const matchStation = item.stationName.toLowerCase().includes(q);
         const matchExpected = item.expectedLocation.toLowerCase().includes(q);
         const matchPhysical = item.physicalLocation.toLowerCase().includes(q);
@@ -186,6 +205,7 @@ export default function AuditReportsPage() {
           matchCode ||
             matchSap ||
             matchName ||
+            matchCategory ||
             matchStation ||
             matchExpected ||
             matchPhysical ||
@@ -194,7 +214,7 @@ export default function AuditReportsPage() {
       }
       return true;
     });
-  }, [items, conditionFilter, searchQuery]);
+  }, [items, conditionFilter, categoryFilter, searchQuery]);
 
   // Pagination calculation
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
@@ -365,10 +385,46 @@ export default function AuditReportsPage() {
               )}
             </div>
 
+            {/* Category Filter */}
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="reportCategoryFilter"
+                className="text-xs text-muted-foreground font-medium shrink-0 flex items-center gap-1 cursor-pointer"
+              >
+                <Tags className="w-3.5 h-3.5 text-primary" />
+                <span>Category:</span>
+              </label>
+              <select
+                id="reportCategoryFilter"
+                name="category"
+                className="h-9 px-3 rounded-lg border bg-background text-xs font-semibold text-foreground focus:ring-2 focus:ring-primary/20 max-w-[200px]"
+                value={categoryFilter}
+                onChange={(e) => {
+                  setCategoryFilter(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filter report by equipment category"
+              >
+                <option value="ALL">All Categories ({categoryOptions.length})</option>
+                {categoryOptions.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Audit Status Filter */}
             <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground font-medium shrink-0">Audit Status:</span>
+              <label
+                htmlFor="reportStatusFilter"
+                className="text-xs text-muted-foreground font-medium shrink-0 cursor-pointer"
+              >
+                Audit Status:
+              </label>
               <select
+                id="reportStatusFilter"
+                name="status"
                 className="h-9 px-3 rounded-lg border bg-background text-xs font-semibold text-foreground focus:ring-2 focus:ring-primary/20"
                 value={statusFilter}
                 onChange={(e) => {
@@ -387,8 +443,15 @@ export default function AuditReportsPage() {
 
             {/* Condition Filter */}
             <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground font-medium shrink-0">Condition:</span>
+              <label
+                htmlFor="reportConditionFilter"
+                className="text-xs text-muted-foreground font-medium shrink-0 cursor-pointer"
+              >
+                Condition:
+              </label>
               <select
+                id="reportConditionFilter"
+                name="condition"
                 className="h-9 px-3 rounded-lg border bg-background text-xs font-semibold text-foreground focus:ring-2 focus:ring-primary/20"
                 value={conditionFilter}
                 onChange={(e) => {
@@ -408,7 +471,7 @@ export default function AuditReportsPage() {
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Filter by asset tag, SAP code, equipment name, station, expected location, auditor..."
+              placeholder="Filter by asset tag, SAP code, equipment name, category, station, expected location, auditor..."
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
@@ -425,6 +488,132 @@ export default function AuditReportsPage() {
               </button>
             )}
           </div>
+
+          {/* Active Filter Pills */}
+          {(categoryFilter !== 'ALL' ||
+            statusFilter !== 'ALL' ||
+            conditionFilter !== 'ALL' ||
+            searchQuery.trim() ||
+            selectedPlanId) && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t text-xs">
+              <span className="text-[11px] font-semibold text-muted-foreground mr-1 flex items-center gap-1">
+                <Filter className="w-3 h-3 text-primary" />
+                <span>Active Filters:</span>
+              </span>
+
+              {categoryFilter !== 'ALL' && (
+                <Badge
+                  variant="outline"
+                  className="bg-primary/5 text-primary border-primary/20 gap-1 text-[11px] font-medium py-0.5"
+                >
+                  <Tags className="w-3 h-3" />
+                  <span>Category: {categoryFilter}</span>
+                  <button
+                    onClick={() => {
+                      setCategoryFilter('ALL');
+                      setPage(1);
+                    }}
+                    className="hover:text-destructive ml-0.5"
+                    title="Remove category filter"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </Badge>
+              )}
+
+              {statusFilter !== 'ALL' && (
+                <Badge
+                  variant="outline"
+                  className="bg-primary/5 text-primary border-primary/20 gap-1 text-[11px] font-medium py-0.5"
+                >
+                  <span>Status: {statusFilter}</span>
+                  <button
+                    onClick={() => {
+                      setStatusFilter('ALL');
+                      setPage(1);
+                    }}
+                    className="hover:text-destructive ml-0.5"
+                    title="Remove status filter"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </Badge>
+              )}
+
+              {conditionFilter !== 'ALL' && (
+                <Badge
+                  variant="outline"
+                  className="bg-primary/5 text-primary border-primary/20 gap-1 text-[11px] font-medium py-0.5"
+                >
+                  <span>Condition: {conditionFilter}</span>
+                  <button
+                    onClick={() => {
+                      setConditionFilter('ALL');
+                      setPage(1);
+                    }}
+                    className="hover:text-destructive ml-0.5"
+                    title="Remove condition filter"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </Badge>
+              )}
+
+              {selectedPlanId && (
+                <Badge
+                  variant="outline"
+                  className="bg-primary/5 text-primary border-primary/20 gap-1 text-[11px] font-medium py-0.5"
+                >
+                  <span>Plan: {plans.find((p) => p.id === selectedPlanId)?.name || 'Filtered'}</span>
+                  <button
+                    onClick={() => {
+                      setSelectedPlanId('');
+                      setPage(1);
+                    }}
+                    className="hover:text-destructive ml-0.5"
+                    title="Clear plan filter"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </Badge>
+              )}
+
+              {searchQuery.trim() && (
+                <Badge
+                  variant="outline"
+                  className="bg-primary/5 text-primary border-primary/20 gap-1 text-[11px] font-medium py-0.5"
+                >
+                  <span>Query: &ldquo;{searchQuery}&rdquo;</span>
+                  <button
+                    onClick={() => {
+                      setSearchQuery('');
+                      setPage(1);
+                    }}
+                    className="hover:text-destructive ml-0.5"
+                    title="Clear search query"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </Badge>
+              )}
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setCategoryFilter('ALL');
+                  setStatusFilter('ALL');
+                  setConditionFilter('ALL');
+                  setSelectedPlanId('');
+                  setSearchQuery('');
+                  setPage(1);
+                }}
+                className="h-6 px-2 text-[11px] text-muted-foreground hover:text-destructive gap-1"
+              >
+                <span>Reset all</span>
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -681,6 +870,7 @@ export default function AuditReportsPage() {
                           size="sm"
                           onClick={() => {
                             setSearchQuery('');
+                            setCategoryFilter('ALL');
                             setConditionFilter('ALL');
                             setStatusFilter('ALL');
                           }}

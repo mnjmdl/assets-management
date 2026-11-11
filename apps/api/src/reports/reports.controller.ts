@@ -76,11 +76,15 @@ export class ReportsController {
     @Query('planId') planId?: string,
     @Query('status') status?: string,
     @Query('locationId') locationId?: string,
+    @Query('category') category?: string,
+    @Query('categoryId') categoryId?: string,
   ) {
     return this.reportsService.auditStatusReport({
       planId,
       status,
       locationId,
+      category,
+      categoryId,
     });
   }
 
@@ -96,11 +100,15 @@ export class ReportsController {
     @Query('planId') planId?: string,
     @Query('status') status?: string,
     @Query('locationId') locationId?: string,
+    @Query('category') category?: string,
+    @Query('categoryId') categoryId?: string,
   ) {
     const buffer = await this.reportsService.generateAuditStatusExcel({
       planId,
       status,
       locationId,
+      category,
+      categoryId,
     });
     res.end(buffer);
   }
