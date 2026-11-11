@@ -1547,18 +1547,6 @@ export default function AuditPlanDetailPage() {
                       </Button>
                     )}
 
-                    {/* Batch Mark as VERIFIED */}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={isBatchUpdating}
-                      onClick={() => handleBatchAction('MARK_VERIFIED')}
-                      className="h-8 gap-1.5 text-xs text-emerald-700 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 font-semibold shadow-2xs"
-                      title="Manually mark all selected assets as VERIFIED"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Mark VERIFIED</span>
-                    </Button>
 
                     {/* Batch Reset to PENDING */}
                     <Button
