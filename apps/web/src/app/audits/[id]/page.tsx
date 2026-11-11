@@ -416,6 +416,11 @@ export default function AuditPlanDetailPage() {
     return selectedItems.every(isMismatchItem);
   }, [selectedItems]);
 
+  const allSelectedArePending = useMemo(() => {
+    if (selectedItems.length === 0) return false;
+    return selectedItems.every((i) => i.status === 'PENDING');
+  }, [selectedItems]);
+
   const pendingTransferSelectedCount = useMemo(() => {
     return selectedItems.filter((i) => getPendingTransferForAsset(i.asset.id)).length;
   }, [selectedItems, generatedTransferAssetIds, pendingTransfers]);
@@ -1527,18 +1532,20 @@ export default function AuditPlanDetailPage() {
                       </>
                     )}
 
-                    {/* Batch Mark as MISSING */}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={isBatchUpdating}
-                      onClick={() => handleBatchAction('MARK_MISSING')}
-                      className="h-8 gap-1.5 text-xs text-amber-700 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/10 font-semibold shadow-2xs"
-                      title="Mark all selected assets as MISSING"
-                    >
-                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Mark MISSING ({selectedChecklistIds.size})</span>
-                    </Button>
+                    {/* Batch Mark as MISSING - only show if all selected rows are PENDING */}
+                    {allSelectedArePending && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isBatchUpdating}
+                        onClick={() => handleBatchAction('MARK_MISSING')}
+                        className="h-8 gap-1.5 text-xs text-amber-700 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/10 font-semibold shadow-2xs"
+                        title="Mark all selected assets as MISSING"
+                      >
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Mark MISSING ({selectedChecklistIds.size})</span>
+                      </Button>
+                    )}
 
                     {/* Batch Mark as VERIFIED */}
                     <Button
