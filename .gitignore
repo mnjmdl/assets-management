@@ -15,3 +15,4 @@ deploy-ubuntu.tar.gz
 *.zip
 *.tar.gz
 *.tar
+*@*

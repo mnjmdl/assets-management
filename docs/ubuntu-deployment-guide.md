@@ -80,7 +80,7 @@ deploy-ubuntu/
 ### Step 3: Transfer Archive to Ubuntu Server
 Copy `deploy-ubuntu.tar.gz` to your Ubuntu server using SCP, SFTP, USB, or shared network drive:
 ```bash
-scp deploy-ubuntu.tar.gz user@192.168.45.XX:/var/www/
+scp deploy-ubuntu.tar.gz administrator@192.168.65.50:/var/www/
 ```
 
 ### Step 4: Extract and Deploy on Ubuntu
