@@ -83,42 +83,49 @@ Copy `deploy-ubuntu.tar.gz` to your Ubuntu server using SCP, SFTP, USB, or share
 scp deploy-ubuntu.tar.gz administrator@192.168.65.50:/var/www/
 ```
 
-### Step 4: Extract and Deploy on Ubuntu
-On your Ubuntu machine, run:
-```bash
-# 1. Create target directory
-sudo mkdir -p /var/www/assets-management
-sudo chown -R $administrator:$administrator /var/www/assets-management
+### Step 4: Extract and Deploy on Ubuntu (Step-by-Step)
 
-# 2. Extract archive
-tar -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1
-cd /var/www/assets-management
+#### 1. Install System Prerequisites (Nginx & Node.js)
+On your Ubuntu server terminal, ensure Nginx and basic utilities are installed:
+```bash
+sudo apt update
+sudo apt install -y curl ca-certificates gnupg nginx
 ```
 
-Option 1: Overwrite everything except your .env and uploads/
-# 1. Ensure write permissions
+#### 2. Create Target Directory & Set Permissions
+Ensure the destination folder is owned by your current user:
+```bash
+sudo mkdir -p /var/www/assets-management
 sudo chown -R $USER:$USER /var/www/assets-management
+```
 
-# 2. Extract and overwrite files while preserving production .env and uploaded photos
-sudo tar --overwrite --warning=no-unknown-keyword \
-  --exclude="*.env" \
-  --exclude="api/uploads/*" \
-  -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1
+#### 3. Extract the Package
+Extract the archive into `/var/www/assets-management`:
 
-# 3. Reload services with zero downtime
-cd /var/www/assets-management
-chmod +x *.sh api/*.sh web/*.sh
-pm2 reload all --update-env
+* **For First-Time Installation:**
+  ```bash
+  tar --warning=no-unknown-keyword -xzf /var/www/deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1
+  cd /var/www/assets-management
+  ```
+
+* **For Updating an Existing Deployment (Safely Overwrite while preserving `.env` and photos):**
+  ```bash
+  sudo chown -R $USER:$USER /var/www/assets-management
+  tar --overwrite --warning=no-unknown-keyword \
+    --exclude="*.env" \
+    --exclude="api/uploads/*" \
+    -xzf /var/www/deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1
+  cd /var/www/assets-management
+  ```
 
 > [!NOTE]
-> If you see `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'`, this is **harmless**. It is an informational message from Ubuntu's GNU tar ignoring macOS-specific extended attribute headers. All files, permissions, and directories are extracted normally.
-> If you want to suppress the message, add `--warning=no-unknown-keyword`:
-> `tar --warning=no-unknown-keyword -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1`
+> If you see `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr...'`, this is **harmless**. It is an informational message from Ubuntu's GNU tar skipping macOS-specific extended attributes. All files, permissions, and directories are extracted normally. Adding `--warning=no-unknown-keyword` suppresses the message.
 
+#### 4. Configure Database Connection (`.env`)
+Create or verify your production `.env` file:
 ```bash
-# 3. Configure Database Connection (.env)
 nano .env
-# Also verify/copy to api/.env
+# Also copy to api/.env so both web and backend use the exact same configuration
 cp .env api/.env
 ```
 Ensure your database string points to your internal enterprise MSSQL server (replace `192.168.45.51` with your actual SQL Server IP):
@@ -133,17 +140,59 @@ NEXT_PUBLIC_API_URL=http://<YOUR_UBUNTU_IP>/api
 > - After editing `.env`, copy it to `api/`: `cp /var/www/assets-management/.env /var/www/assets-management/api/.env`.
 > - Reload PM2 environment: `pm2 restart all --update-env`.
 
+#### 5. Configure Nginx Reverse Proxy (Port 80)
+Ensure Nginx directories exist, deploy the configuration, and enable the site:
 ```bash
-# 4. Run the one-click installer
+# 1. Ensure sites-available and sites-enabled directories exist
+sudo mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+
+# 2. Copy the reverse proxy configuration
+sudo cp nginx/assets-management.conf /etc/nginx/sites-available/assets-management
+
+# 3. Enable site and disable default placeholder
+sudo ln -sf /etc/nginx/sites-available/assets-management /etc/nginx/sites-enabled/assets-management
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# 4. Test syntax and reload Nginx
+sudo nginx -t
+sudo systemctl reload nginx
+sudo systemctl enable nginx
+```
+
+#### 6. Run the One-Click Installer & Start Services
+Make runner scripts executable and launch the services:
+```bash
 chmod +x *.sh api/*.sh web/*.sh
 ./install.sh
 ```
 
 **The installer automatically:**
 1. Checks and installs Node.js 20 LTS and PM2 (if not already installed).
-2. Deploys the Nginx reverse proxy configuration to `/etc/nginx/sites-available/assets-management`.
-3. Enables port 80 routing (routing `/api/*` to NestJS and `/*` to Next.js).
-4. Starts both services under PM2 with persistent boot startup (`pm2 startup`).
+2. Sets up PM2 background daemons for both NestJS API (port 3001) and Next.js Web (port 3000).
+3. Configures auto-restart on system reboot (`pm2 startup` & `pm2 save`).
+
+---
+
+### Quick Update Cheat Sheet (For Future Updates)
+Whenever you upload a new `deploy-ubuntu.tar.gz` to the server:
+```bash
+cd /var/www
+sudo chown -R $USER:$USER /var/www/assets-management
+
+# 1. Extract update without overwriting database credentials or photos
+tar --overwrite --warning=no-unknown-keyword \
+  --exclude="*.env" \
+  --exclude="api/uploads/*" \
+  -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1
+
+# 2. Update Nginx configuration
+cd /var/www/assets-management
+sudo cp nginx/assets-management.conf /etc/nginx/sites-available/assets-management
+sudo nginx -t && sudo systemctl reload nginx
+
+# 3. Reload PM2 services with zero downtime
+pm2 reload all --update-env
+```
 
 ---
 
