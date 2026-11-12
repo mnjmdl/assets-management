@@ -690,7 +690,10 @@ export default function AuditPlanDetailPage() {
     }
     try {
       const res = await fetch(`/api/audits/sessions/${sessionId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete session');
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || `Failed to delete session (HTTP ${res.status})`);
+      }
       await fetchPlanDetails();
       if (selectedSessionId === sessionId) {
         setSelectedSessionId(null);
@@ -828,7 +831,10 @@ export default function AuditPlanDetailPage() {
     }
     try {
       const res = await fetch(`/api/audits/plans/${planId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete audit plan');
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || `Failed to delete audit plan (HTTP ${res.status})`);
+      }
       router.push('/audits');
     } catch (e: any) {
       alert(e.message || 'Could not delete plan');

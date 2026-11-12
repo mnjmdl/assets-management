@@ -89,21 +89,51 @@ export class AuditsService {
     }
 
     const sessionIds = plan.sessions.map((s) => s.id);
-    if (sessionIds.length > 0) {
-      await this.prisma.auditDiscrepancy.deleteMany({
-        where: { sessionId: { in: sessionIds } },
-      });
-      await this.prisma.auditItem.deleteMany({
-        where: { sessionId: { in: sessionIds } },
-      });
-      await this.prisma.auditSession.deleteMany({
-        where: { id: { in: sessionIds } },
-      });
-    }
 
-    return this.prisma.auditPlan.delete({
-      where: { id },
+    const res = await this.prisma.$transaction(async (tx) => {
+      // 1. Delete all discrepancies for any session belonging to this plan
+      await tx.auditDiscrepancy.deleteMany({
+        where: {
+          OR: [
+            { session: { planId: id } },
+            ...(sessionIds.length > 0
+              ? [
+                  { sessionId: { in: sessionIds } },
+                  { auditItem: { sessionId: { in: sessionIds } } },
+                ]
+              : []),
+          ],
+        },
+      });
+
+      // 2. Delete all audit items for any session belonging to this plan
+      await tx.auditItem.deleteMany({
+        where: {
+          OR: [
+            { session: { planId: id } },
+            ...(sessionIds.length > 0 ? [{ sessionId: { in: sessionIds } }] : []),
+          ],
+        },
+      });
+
+      // 3. Delete all sessions belonging to this plan
+      await tx.auditSession.deleteMany({
+        where: {
+          OR: [
+            { planId: id },
+            ...(sessionIds.length > 0 ? [{ id: { in: sessionIds } }] : []),
+          ],
+        },
+      });
+
+      // 4. Finally delete the plan itself
+      return tx.auditPlan.delete({
+        where: { id },
+      });
     });
+
+    this.invalidateSessionsCache();
+    return res;
   }
 
   async findAllPlans(filter: FindAllPlansFilter = {}) {
@@ -451,9 +481,19 @@ export class AuditsService {
       throw new NotFoundException(`Audit session with id ${id} not found`);
     }
 
-    await this.prisma.auditDiscrepancy.deleteMany({ where: { sessionId: id } });
-    await this.prisma.auditItem.deleteMany({ where: { sessionId: id } });
-    const res = await this.prisma.auditSession.delete({ where: { id } });
+    const res = await this.prisma.$transaction(async (tx) => {
+      await tx.auditDiscrepancy.deleteMany({
+        where: {
+          OR: [
+            { sessionId: id },
+            { auditItem: { sessionId: id } },
+          ],
+        },
+      });
+      await tx.auditItem.deleteMany({ where: { sessionId: id } });
+      return tx.auditSession.delete({ where: { id } });
+    });
+
     this.invalidateSessionsCache();
     return res;
   }

@@ -95,6 +95,21 @@ tar -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1
 cd /var/www/assets-management
 ```
 
+Option 1: Overwrite everything except your .env and uploads/
+# 1. Ensure write permissions
+sudo chown -R $USER:$USER /var/www/assets-management
+
+# 2. Extract and overwrite files while preserving production .env and uploaded photos
+tar --overwrite --warning=no-unknown-keyword \
+  --exclude="*.env" \
+  --exclude="api/uploads/*" \
+  -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1
+
+# 3. Reload services with zero downtime
+cd /var/www/assets-management
+chmod +x *.sh api/*.sh web/*.sh
+pm2 reload all --update-env
+
 > [!NOTE]
 > If you see `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'`, this is **harmless**. It is an informational message from Ubuntu's GNU tar ignoring macOS-specific extended attribute headers. All files, permissions, and directories are extracted normally.
 > If you want to suppress the message, add `--warning=no-unknown-keyword`:

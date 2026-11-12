@@ -180,7 +180,8 @@ export default function AuditsPage() {
     try {
       const res = await fetch(`/api/audits/plans/${planId}`, { method: 'DELETE' });
       if (!res.ok) {
-        throw new Error('Failed to delete audit plan');
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || `Failed to delete audit plan (HTTP ${res.status})`);
       }
       await mutatePlans();
     } catch (e: any) {
