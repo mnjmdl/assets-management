@@ -1010,7 +1010,18 @@ export async function recordSessionItemScan(
     }
 
     // 2. Check if this item has already been audited in any other session within the same audit plan
-    if (scanData.planId) {
+    let planId = scanData.planId;
+    if (!planId) {
+      const sessRow = await db.getFirstAsync<{ planId: string }>(
+        'SELECT planId FROM audit_sessions WHERE id = ? LIMIT 1;',
+        [sessionId],
+      );
+      if (sessRow?.planId) {
+        planId = sessRow.planId;
+      }
+    }
+
+    if (planId) {
       const existingInPlan = await db.getFirstAsync<{
         id: string;
         sessionId: string;
@@ -1020,15 +1031,15 @@ export async function recordSessionItemScan(
       }>(
         `SELECT sai.id, sai.sessionId, sai.foundLocationName, s.locationName as sessionLocationName, sai.scannedAt 
          FROM session_audit_items sai
-         JOIN audit_sessions s ON s.id = sai.sessionId
-         WHERE s.planId = ? 
-           AND s.status != 'CANCELLED'
+         LEFT JOIN audit_sessions s ON s.id = sai.sessionId
+         WHERE (s.planId = ? OR sai.sessionId IN (SELECT id FROM audit_sessions WHERE planId = ?))
+           AND (s.status IS NULL OR s.status != 'CANCELLED')
            AND sai.assetId = ? 
            AND sai.sessionId != ? 
            AND sai.scannedAt IS NOT NULL 
            AND sai.status != 'PENDING'
          LIMIT 1;`,
-        [scanData.planId, asset.id, sessionId],
+        [planId, planId, asset.id, sessionId],
       );
 
       if (existingInPlan) {

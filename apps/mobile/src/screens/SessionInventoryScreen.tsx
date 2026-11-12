@@ -31,6 +31,7 @@ import {
 } from '../services/syncManager';
 import {
   saveCachedSession,
+  saveCachedSessions,
   getCachedSession,
   saveCachedSessionItems,
   getSessionAuditItems,
@@ -297,6 +298,25 @@ export const SessionInventoryScreen = () => {
           if (sessionRes) {
             setSession(sessionRes);
             await saveCachedSession(sessionRes);
+
+            // Pre-cache other sessions' audited items from the parent plan to catch cross-session duplicates locally
+            const targetPlanId = sessionRes.planId || (sessionRes as any)?.plan?.id;
+            if (targetPlanId) {
+              try {
+                const planRes = await apiRequest<any>(`/audits/plans/${targetPlanId}`, { timeoutMs: 5000 });
+                const planData = planRes?.data || planRes;
+                if (planData?.sessions && Array.isArray(planData.sessions)) {
+                  await saveCachedSessions(planData.sessions);
+                  for (const otherSess of planData.sessions) {
+                    if (otherSess.items && Array.isArray(otherSess.items) && otherSess.items.length > 0) {
+                      await saveCachedSessionItems(otherSess.id, otherSess.items);
+                    }
+                  }
+                }
+              } catch (planErr) {
+                console.warn('[SessionInventoryScreen] Could not pre-cache plan sessions:', planErr);
+              }
+            }
           }
 
           const serverItems = Array.isArray(itemsRes)
@@ -417,11 +437,62 @@ export const SessionInventoryScreen = () => {
       return;
     }
 
+    // If online, verify immediately against backend to catch cross-session duplicates in this audit plan
+    if (!isOfflineMode) {
+      try {
+        const foundAsset = await findCachedAsset(cleanCode);
+        const assetIdToSubmit = foundAsset?.id || cleanCode;
+        const isMismatch = Boolean(
+          foundAsset?.locationId &&
+            session?.locationId &&
+            foundAsset.locationId !== session.locationId,
+        );
+
+        await apiRequest(`/audits/sessions/${sessionId}/items`, {
+          method: 'POST',
+          body: JSON.stringify({
+            assetId: assetIdToSubmit,
+            status: isMismatch ? 'MISMATCH' : 'VERIFIED',
+            condition: foundAsset?.condition || 'GOOD',
+            foundLocationId: session?.locationId || undefined,
+            notes: isMismatch
+              ? `Station mismatch: Found at ${session?.location?.name || 'Current Station'} (Assigned: ${foundAsset?.locationName || 'Unassigned'})`
+              : `Station audit verified at ${session?.location?.name || 'Current Station'}`,
+          }),
+          timeoutMs: 5000,
+        });
+      } catch (apiErr: any) {
+        const errMsg = apiErr?.message || '';
+        const isConflict =
+          apiErr?.status === 409 ||
+          errMsg.includes('Duplicate') ||
+          errMsg.includes('ALREADY') ||
+          errMsg.includes('Conflict');
+
+        if (isConflict) {
+          if (Platform.OS !== 'web') {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+          }
+          setScanToast({
+            type: 'error',
+            message: `DUPLICATE: ALREADY SCANNED IN AUDIT PLAN`,
+          });
+          setTimeout(() => setScanToast(null), 4000);
+          Alert.alert(
+            'Duplicate Asset Scanned',
+            errMsg || `⚠️ Equipment "${cleanCode}" was ALREADY audited in another session of this audit plan.\n\nDuplicate scans are rejected and NOT saved.`,
+            [{ text: 'Dismiss', style: 'cancel' }],
+          );
+          return;
+        }
+      }
+    }
+
     const result = await recordSessionItemScan(sessionId, cleanCode, {
       locationId: session?.locationId || undefined,
       locationName: session?.location?.name,
       locationCode: session?.location?.code,
-      planId: session?.planId,
+      planId: session?.planId || (session as any)?.plan?.id,
     });
 
     if (result.isDuplicate) {

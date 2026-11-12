@@ -559,8 +559,33 @@ export const AuditScreen = () => {
             ? `⚠️ ${asset.assetCode} verified & recorded (Relocated to ${currentStation.name})`
             : `✅ ${asset.assetCode} verified & recorded in session inventory`,
         );
-      } catch (liveErr) {
-        console.warn('[AuditScreen] Live scan submit failed, saved locally in SQLite outbox:', liveErr);
+      } catch (liveErr: any) {
+        console.warn('[AuditScreen] Live scan submit failed:', liveErr);
+        const errMsg = liveErr?.message || '';
+        const isConflict =
+          liveErr?.status === 409 ||
+          errMsg.includes('Duplicate') ||
+          errMsg.includes('ALREADY') ||
+          errMsg.includes('Conflict');
+
+        if (isConflict) {
+          // Revert in-memory item
+          setScannedItems((prev) =>
+            prev.filter((it) => it.id !== asset.id && it.assetCode !== asset.assetCode),
+          );
+          if (Platform.OS !== 'web') {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+          }
+          setStatusMessage(`❌ DUPLICATE SCAN REJECTED: ${asset.assetCode}`);
+          Alert.alert(
+            'Duplicate Asset Scanned',
+            errMsg ||
+              `⚠️ Equipment "${asset.assetCode}" (${asset.name}) was ALREADY audited in this audit plan.\n\nDuplicate scans are rejected and NOT saved.`,
+            [{ text: 'Dismiss', style: 'cancel' }],
+          );
+          return;
+        }
+
         triggerLiveSync().catch(() => { });
         setStatusMessage(`💾 ${asset.assetCode} recorded locally in SQLite (sync queued)`);
       }

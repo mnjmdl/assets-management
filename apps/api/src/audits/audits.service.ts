@@ -151,6 +151,21 @@ export class AuditsService {
             _count: { select: { items: true, discrepancies: true } },
             auditor: { select: { id: true, name: true, email: true } },
             location: { select: { id: true, name: true, code: true, type: true } },
+            items: {
+              where: {
+                scannedAt: { not: null },
+                status: { in: ['VERIFIED', 'FOUND', 'DAMAGED', 'MISMATCH'] },
+              },
+              select: {
+                id: true,
+                assetId: true,
+                status: true,
+                scannedAt: true,
+                foundLocationId: true,
+                expectedLocationId: true,
+                asset: { select: { id: true, assetCode: true, sapAssetCode: true, name: true } },
+              },
+            },
           },
           orderBy: { createdAt: 'desc' },
         },
@@ -759,9 +774,34 @@ export class AuditsService {
         where: { sessionId: session.id, assetId: asset.id },
       });
 
-      // Reject/skip already audited items to prevent duplicate records
+      // Reject/skip already audited items in this session to prevent duplicate records
       if (auditItem && auditItem.status !== 'PENDING' && auditItem.scannedAt !== null) {
-        continue;
+        throw new ConflictException(
+          `Duplicate scan rejected: Asset "${asset.assetCode}" (${asset.name}) has ALREADY been audited in this session. Duplicate scans are not allowed.`,
+        );
+      }
+
+      // Reject duplicate scan across sessions in the same audit plan
+      if (session.planId) {
+        const existingInPlan = await this.prisma.auditItem.findFirst({
+          where: {
+            assetId: asset.id,
+            sessionId: { not: session.id },
+            session: { planId: session.planId },
+            status: { in: ['VERIFIED', 'FOUND', 'DAMAGED', 'MISMATCH'] },
+            scannedAt: { not: null },
+          },
+          include: {
+            session: { include: { location: { select: { name: true, code: true } } } },
+            asset: { select: { assetCode: true, name: true } },
+          },
+        });
+
+        if (existingInPlan) {
+          throw new ConflictException(
+            `Duplicate scan rejected: Asset "${existingInPlan.asset?.assetCode || asset.assetCode}" (${existingInPlan.asset?.name || asset.name}) was ALREADY audited in this audit plan (Station: ${existingInPlan.session?.location?.name || 'another station'}). Duplicate scans are not allowed.`,
+          );
+        }
       }
 
       const expectedLocationId = asset.locationId;
@@ -1360,6 +1400,45 @@ export class AuditsService {
             where: { id: session.planId },
             data: { status: 'IN_PROGRESS' },
           });
+        }
+      }
+
+      // Reject duplicate scan in the same session
+      const existingInSession = await this.prisma.auditItem.findFirst({
+        where: {
+          sessionId: session.id,
+          assetId: asset.id,
+          status: { in: ['VERIFIED', 'FOUND', 'DAMAGED', 'MISMATCH'] },
+          scannedAt: { not: null },
+        },
+      });
+
+      if (existingInSession) {
+        throw new ConflictException(
+          `Duplicate scan rejected: Asset "${asset.assetCode}" (${asset.name}) has ALREADY been audited in this session. Duplicate scans are not allowed.`,
+        );
+      }
+
+      // Reject duplicate scan across sessions in the same audit plan
+      if (session.planId) {
+        const existingInPlan = await this.prisma.auditItem.findFirst({
+          where: {
+            assetId: asset.id,
+            sessionId: { not: session.id },
+            session: { planId: session.planId },
+            status: { in: ['VERIFIED', 'FOUND', 'DAMAGED', 'MISMATCH'] },
+            scannedAt: { not: null },
+          },
+          include: {
+            session: { include: { location: { select: { name: true, code: true } } } },
+            asset: { select: { assetCode: true, name: true } },
+          },
+        });
+
+        if (existingInPlan) {
+          throw new ConflictException(
+            `Duplicate scan rejected: Asset "${existingInPlan.asset?.assetCode || asset.assetCode}" (${existingInPlan.asset?.name || asset.name}) was ALREADY audited in this audit plan (Station: ${existingInPlan.session?.location?.name || 'another station'}). Duplicate scans are not allowed.`,
+          );
         }
       }
 

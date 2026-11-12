@@ -331,6 +331,13 @@ export default function ScanPage() {
             setScannedAssets([]);
             setActiveLocation(null);
             return;
+          } else {
+            const errData = await res.json().catch(() => ({}));
+            const errMsg = errData?.message || 'Failed to save audit scan batch';
+            playChime('warning');
+            setNoticeBanner(`❌ ${errMsg}`);
+            alert(`⚠️ Audit Scan Error:\n\n${errMsg}`);
+            return;
           }
         } catch (netErr) {
           console.warn('Direct commit failed, falling back to offline outbox queue:', netErr);
@@ -501,9 +508,12 @@ export default function ScanPage() {
                 );
                 if (alreadyAuditedInPlan) {
                   playChime('warning');
+                  const stationName = alreadyAuditedInPlan.location?.name || alreadyAuditedInPlan.id;
+                  const alertMsg = `⚠️ DUPLICATE SCAN REJECTED:\n\nAsset "${asset.assetCode}" (${asset.name}) has ALREADY been audited in this audit plan at station "${stationName}".\n\nDuplicate scans are not allowed and this record was NOT saved.`;
                   setNoticeBanner(
-                    `⚠️ DUPLICATE: Asset "${asset.assetCode}" (${asset.name}) has ALREADY been audited in station "${alreadyAuditedInPlan.location?.name || alreadyAuditedInPlan.id}". Duplicate scans are not allowed and not saved.`,
+                    `⚠️ DUPLICATE: Asset "${asset.assetCode}" (${asset.name}) has ALREADY been audited in station "${stationName}". Duplicate scans are not allowed.`,
                   );
+                  alert(alertMsg);
                   return;
                 }
                   // Check location mismatch
