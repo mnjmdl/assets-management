@@ -88,7 +88,7 @@ On your Ubuntu machine, run:
 ```bash
 # 1. Create target directory
 sudo mkdir -p /var/www/assets-management
-sudo chown -R $USER:$USER /var/www/assets-management
+sudo chown -R $administrator:$administrator /var/www/assets-management
 
 # 2. Extract archive
 tar -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1
@@ -100,7 +100,7 @@ Option 1: Overwrite everything except your .env and uploads/
 sudo chown -R $USER:$USER /var/www/assets-management
 
 # 2. Extract and overwrite files while preserving production .env and uploaded photos
-tar --overwrite --warning=no-unknown-keyword \
+sudo tar --overwrite --warning=no-unknown-keyword \
   --exclude="*.env" \
   --exclude="api/uploads/*" \
   -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1

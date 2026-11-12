@@ -451,18 +451,19 @@ if ! command -v pm2 >/dev/null 2>&1; then
 fi
 
 # 3. Configure Nginx
-if command -v nginx >/dev/null 2>&1; then
-    echo -e "\${YELLOW}Configuring Nginx Reverse Proxy...\${NC}"
-    sudo cp nginx/assets-management.conf /etc/nginx/sites-available/assets-management
-    if [ ! -L /etc/nginx/sites-enabled/assets-management ]; then
-        sudo ln -s /etc/nginx/sites-available/assets-management /etc/nginx/sites-enabled/
-    fi
-    sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-    sudo nginx -t && sudo systemctl reload nginx
-    echo -e "\${GREEN}✓ Nginx configured and reloaded on port 80.\${NC}"
-else
-    echo -e "\${YELLOW}Nginx not installed. You can install it via 'sudo apt install -y nginx' or access ports 3000/3001 directly.\${NC}"
+if ! command -v nginx >/dev/null 2>&1; then
+    echo -e "\${YELLOW}Nginx not installed. Installing Nginx via apt...\${NC}"
+    sudo apt-get update
+    sudo apt-get install -y nginx
 fi
+
+echo -e "\${YELLOW}Configuring Nginx Reverse Proxy...\${NC}"
+sudo mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+sudo cp nginx/assets-management.conf /etc/nginx/sites-available/assets-management
+sudo ln -sf /etc/nginx/sites-available/assets-management /etc/nginx/sites-enabled/assets-management
+sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+sudo nginx -t && sudo systemctl reload nginx
+echo -e "\${GREEN}✓ Nginx configured and reloaded on port 80.\${NC}"
 
 # 4. Sync Environment & Start services
 if [ -f "$DIR/.env" ]; then
