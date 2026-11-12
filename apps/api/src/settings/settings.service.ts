@@ -247,7 +247,7 @@ export class SettingsService {
         passwordHash,
         role: dto.role || 'EMPLOYEE',
         phone: dto.phone,
-        isActive: true,
+        isActive: dto.isActive !== undefined ? dto.isActive : true,
       },
       select: {
         id: true,

@@ -393,7 +393,8 @@ export default function SettingsPage() {
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err.message || 'Failed to create user');
+          const errMsg = Array.isArray(err.message) ? err.message.join(', ') : err.message;
+          throw new Error(errMsg || `Failed to create user (HTTP ${res.status})`);
         }
 
         setIsUserModalOpen(false);
