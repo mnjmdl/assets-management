@@ -93,7 +93,14 @@ sudo chown -R $USER:$USER /var/www/assets-management
 # 2. Extract archive
 tar -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1
 cd /var/www/assets-management
+```
 
+> [!NOTE]
+> If you see `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'`, this is **harmless**. It is an informational message from Ubuntu's GNU tar ignoring macOS-specific extended attribute headers. All files, permissions, and directories are extracted normally.
+> If you want to suppress the message, add `--warning=no-unknown-keyword`:
+> `tar --warning=no-unknown-keyword -xzf deploy-ubuntu.tar.gz -C /var/www/assets-management --strip-components=1`
+
+```bash
 # 3. Configure Database Connection (.env)
 nano .env
 # Also verify/copy to api/.env

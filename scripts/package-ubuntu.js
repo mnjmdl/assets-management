@@ -519,7 +519,10 @@ console.log('📦 Compressing into deploy-ubuntu.tar.gz (preserves Linux permiss
 try {
   const tarPath = path.join(ROOT_DIR, 'deploy-ubuntu.tar.gz');
   if (fs.existsSync(tarPath)) fs.unlinkSync(tarPath);
-  execSync('tar -czf deploy-ubuntu.tar.gz deploy-ubuntu', { cwd: ROOT_DIR });
+  execSync('COPYFILE_DISABLE=1 tar --no-mac-metadata -czf deploy-ubuntu.tar.gz deploy-ubuntu', {
+    cwd: ROOT_DIR,
+    env: { ...process.env, COPYFILE_DISABLE: '1' },
+  });
   const sizeMb = (fs.statSync(tarPath).size / (1024 * 1024)).toFixed(2);
   console.log(`🗜️  Created deploy-ubuntu.tar.gz successfully (${sizeMb} MB)`);
 } catch (err) {
