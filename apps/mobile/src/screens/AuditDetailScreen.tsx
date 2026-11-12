@@ -10,7 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute, useNavigation } from '@react-navigation/native';
+import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { apiRequest } from '../services/api';
 import { storage } from '../services/storage';
@@ -70,9 +70,11 @@ export const AuditDetailScreen = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'IN_PROGRESS' | 'COMPLETED'>('ALL');
 
-  useEffect(() => {
-    loadPlanDetails();
-  }, [planId]);
+  useFocusEffect(
+    useCallback(() => {
+      loadPlanDetails();
+    }, [planId, isOfflineMode]),
+  );
 
   const loadPlanDetails = async (isRefresh = false) => {
     if (!planId) return;
@@ -92,10 +94,9 @@ export const AuditDetailScreen = () => {
         });
         setPlan(data);
         await storage.setObject(cacheKey, data);
-        if (data?.sessions) {
-          saveCachedSessions(data.sessions).catch(() => {});
-          pruneOrphanedSessions(planId, data.sessions.map((s: any) => s.id)).catch(() => {});
-        }
+        const serverSessions = data?.sessions || [];
+        saveCachedSessions(serverSessions).catch(() => {});
+        pruneOrphanedSessions(planId, serverSessions.map((s: any) => s.id)).catch(() => {});
       } else {
         const cached = await storage.getObject<AuditPlanDetail>(cacheKey);
         if (cached) {

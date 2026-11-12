@@ -453,7 +453,9 @@ export class AuditsService {
 
     await this.prisma.auditDiscrepancy.deleteMany({ where: { sessionId: id } });
     await this.prisma.auditItem.deleteMany({ where: { sessionId: id } });
-    return this.prisma.auditSession.delete({ where: { id } });
+    const res = await this.prisma.auditSession.delete({ where: { id } });
+    this.invalidateSessionsCache();
+    return res;
   }
 
   async startSession(id: string, auditorId: string) {

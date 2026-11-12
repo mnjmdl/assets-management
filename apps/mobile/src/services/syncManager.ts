@@ -16,6 +16,7 @@ import {
   getLocationCount,
   markSessionItemSynced,
   saveCachedSessions,
+  syncAllCachedSessions,
   saveCachedSessionItems,
 } from '../database/db';
 
@@ -198,10 +199,10 @@ export async function runFullSync(onProgress?: ProgressCallback): Promise<{
         timeoutMs: 15000,
       });
       const sessList = Array.isArray(sessRes) ? sessRes : sessRes?.data || [];
-      if (sessList.length > 0) {
-        sessionCount = sessList.length;
-        await saveCachedSessions(sessList);
+      sessionCount = sessList.length;
+      await syncAllCachedSessions(sessList);
 
+      if (sessList.length > 0) {
         // Fetch and refresh checklist items for active sessions
         const activeSessions = sessList.filter(
           (s: any) => s.status === 'IN_PROGRESS' || s.status === 'NOT_STARTED',
@@ -221,13 +222,13 @@ export async function runFullSync(onProgress?: ProgressCallback): Promise<{
             console.warn(`[SyncManager] Could not preload items for session ${s.id}:`, itemErr);
           }
         }
-
-        // Clean up any stale synced items whose sessions no longer exist
-        await db.runAsync(
-          `DELETE FROM session_audit_items 
-           WHERE sessionId NOT IN (SELECT id FROM audit_sessions) AND synced = 1;`,
-        );
       }
+
+      // Clean up any stale synced items whose sessions no longer exist
+      await db.runAsync(
+        `DELETE FROM session_audit_items 
+         WHERE sessionId NOT IN (SELECT id FROM audit_sessions) AND synced = 1;`,
+      );
     } catch (sessErr) {
       console.warn('[SyncManager] Failed to cache sessions during sync, continuing:', sessErr);
     }

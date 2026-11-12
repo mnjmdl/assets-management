@@ -684,6 +684,44 @@ export async function saveCachedSessions(sessions: any[]): Promise<void> {
 }
 
 /**
+ * Synchronize local SQLite audit_sessions with the latest list from the server.
+ * Updates/inserts current sessions and prunes sessions that have been deleted or cancelled on the server.
+ * Also cleans up orphaned synced checklist items.
+ */
+export async function syncAllCachedSessions(serverSessions: any[]): Promise<void> {
+  try {
+    const db = await getDatabase();
+    if (!serverSessions || serverSessions.length === 0) {
+      // Server returned 0 sessions (all deleted/none exist). Clear cached sessions & synced checklist items.
+      await db.runAsync('DELETE FROM audit_sessions;');
+      await db.runAsync(
+        'DELETE FROM session_audit_items WHERE synced = 1;'
+      );
+      return;
+    }
+
+    // Upsert the sessions received from the server
+    await saveCachedSessions(serverSessions);
+
+    // Prune any cached sessions that are no longer on the server
+    const validIds = serverSessions.map((s) => s.id).filter(Boolean);
+    if (validIds.length > 0) {
+      const placeholders = validIds.map(() => '?').join(',');
+      await db.runAsync(
+        `DELETE FROM audit_sessions WHERE id NOT IN (${placeholders});`,
+        validIds,
+      );
+      await db.runAsync(
+        `DELETE FROM session_audit_items WHERE sessionId NOT IN (${placeholders}) AND synced = 1;`,
+        validIds,
+      );
+    }
+  } catch (err) {
+    console.warn('[db] Error in syncAllCachedSessions:', err);
+  }
+}
+
+/**
  * Prune sessions and checklist items that no longer exist on the server for a plan.
  * Preserves local items that have pending offline changes (synced = 0).
  */

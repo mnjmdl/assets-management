@@ -26,6 +26,7 @@ import {
   getAssetCount,
   getAllCachedSessions,
   saveCachedSessions,
+  syncAllCachedSessions,
 } from '../database/db';
 import { apiRequest } from '../services/api';
 import { storage } from '../services/storage';
@@ -211,54 +212,37 @@ export const AuditScreen = () => {
 
     try {
       // 1. INSTANT LOAD: Load cached sessions from SQLite immediately (0ms, no network delay)
-      const cached = await getAllCachedSessions();
-      if (cached && cached.length > 0) {
-        setSessions(cached);
-        setIsLoadingSessions(false);
-
-        // 2. BACKGROUND REVALIDATE: Fire-and-forget in background without blocking screen render
-        if (!isOfflineMode) {
-          apiRequest<{ data: AuditSessionRecord[] } | AuditSessionRecord[]>(
-            '/audits/sessions?limit=30',
-            { timeoutMs: 5000 },
-          )
-            .then(async (response) => {
-              const list = Array.isArray(response) ? response : response?.data || [];
-              if (list.length > 0) {
-                setSessions(list);
-                await saveCachedSessions(list);
-              }
-            })
-            .catch((err) => {
-              console.warn('[AuditScreen] Background fetch error:', err);
-            })
-            .finally(() => {
-              if (isRefresh) setIsRefreshingSessions(false);
-            });
+      if (!isRefresh) {
+        const cached = await getAllCachedSessions();
+        if (cached && cached.length > 0) {
+          setSessions(cached);
+          setIsLoadingSessions(false);
         }
-        return;
       }
 
-      // 3. Fallback: If local database has 0 cached sessions, fetch from API with shorter timeout
-      if (!isRefresh && sessions.length === 0) {
-        setIsLoadingSessions(true);
-      }
-
+      // 2. REVALIDATE / FETCH FROM API if online
       if (!isOfflineMode) {
-        const response = await apiRequest<{ data: AuditSessionRecord[] } | AuditSessionRecord[]>(
-          '/audits/sessions?limit=30',
-          { timeoutMs: 5000 },
-        ).catch((err) => {
-          console.warn('[AuditScreen] Initial sessions fetch error:', err);
-          return null;
-        });
+        if (!isRefresh && sessions.length === 0) {
+          setIsLoadingSessions(true);
+        }
 
-        if (response) {
-          const list = Array.isArray(response) ? response : response?.data || [];
-          if (list.length > 0) {
-            setSessions(list);
-            await saveCachedSessions(list);
-          }
+        const fetchPromise = apiRequest<{ data: AuditSessionRecord[] } | AuditSessionRecord[]>(
+          '/audits/sessions?limit=50',
+          { timeoutMs: 6000 },
+        )
+          .then(async (response) => {
+            if (response !== null && response !== undefined) {
+              const list = Array.isArray(response) ? response : response?.data || [];
+              setSessions(list);
+              await syncAllCachedSessions(list);
+            }
+          })
+          .catch((err) => {
+            console.warn('[AuditScreen] Sessions fetch error:', err);
+          });
+
+        if (isRefresh) {
+          await fetchPromise;
         }
       }
     } catch (e) {
@@ -307,6 +291,10 @@ export const AuditScreen = () => {
           } else if (planList.length > 0) {
             setSelectedPlan(planList[0]);
           }
+        } else {
+          setPlans([]);
+          setSelectedPlan(null);
+          storage.setObject('CACHED_AUDIT_PLANS', []).catch(() => { });
         }
       } catch (e) {
         console.warn('[AuditScreen] Error fetching plans:', e);
