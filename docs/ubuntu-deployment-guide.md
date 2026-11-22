@@ -314,3 +314,15 @@ sudo systemctl reload nginx
 # Check Nginx status
 sudo systemctl status nginx
 ```
+
+### Automated Full Verified Audit (Batch Script)
+To generate an automated full audit plan with 100% verified assets directly on the Ubuntu server:
+```bash
+cd /var/www/assets-management
+
+# Run with default timestamp
+npm run db:auto-audit
+
+# Or specify custom audit name
+npm run db:auto-audit -- --name "Factory Full Floor Audit"
+```

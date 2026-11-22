@@ -209,6 +209,12 @@ npm run db:migrate
 
 # Open Prisma Studio
 npm run db:studio
+
+# Create or reset default Super Admin user
+npm run create-admin
+
+# Generate automated completed audit plan (all assets verified)
+npm run db:auto-audit
 ```
 
 > **MSSQL Note**: Microsoft SQL Server connector does not support native Prisma enums (enum validation is maintained in `@repo/types` and `@repo/validators`), and multiple cascade paths are handled with explicit `NoAction` rules.

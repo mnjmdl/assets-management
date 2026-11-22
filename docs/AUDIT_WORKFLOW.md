@@ -209,3 +209,59 @@ Auditors and managers can review, filter, and export audit reconciliation status
 | **Saved Chime** | `523 Hz &rarr; 659 Hz &rarr; 784 Hz` | Batch committed and saved with location |
 | **Warning Chime** | `440 Hz &rarr; 330 Hz` | Asset scanned before location placard, or duplicate scan |
 
+---
+
+## ⚡ Automated Full Verified Audit (Batch Script)
+
+For compliance baselines, bulk testing, or automated factory-wide physical verification reconciliations, an enterprise batch script is provided at **[`scripts/auto-audit-verified.js`](../scripts/auto-audit-verified.js)**.
+
+### Procedure Overview
+1. **Auditor Resolution**: Automatically detects and assigns your registered `SUPER_ADMIN` or `ASSET_MANAGER` user.
+2. **Audit Plan Generation**: Creates an `AuditPlan` with `scopeType: 'ALL'` and marks status as **`COMPLETED`**.
+3. **Comprehensive Session Creation**: Creates a single consolidated `AuditSession` (`locationId: null`, spanning all factory locations) and marks status as **`COMPLETED`**.
+4. **All Assets Scanned as `VERIFIED`**:
+   - Fetches all active inventory assets (`isActive: true`).
+   - Inserts records into `AuditItem` in batches of 200 (staying safely within MSSQL's 2,100 query parameter limit).
+   - Marks each equipment tag with:
+     - **Status**: `VERIFIED` (100% verification rate)
+     - **Expected Location**: Asset's assigned location
+     - **Found Location**: Matches expected location (`0` relocation mismatches)
+     - **Condition**: `Good` (`0` defects)
+     - **Scanned At**: Current timestamp
+   - Produces **0 missing equipment** and **0 discrepancies**.
+
+### How to Run
+
+Run the script from the project root:
+
+```bash
+# 1. Run with default timestamped name (e.g., "Full Verified Audit - 2026-11-22 17:00")
+npm run db:auto-audit
+
+# 2. Run with a custom plan name
+npm run db:auto-audit -- --name "Q4 2026 Comprehensive Factory Audit"
+
+# 3. Or directly via node
+node scripts/auto-audit-verified.js --name "Annual Fixed Assets Audit"
+```
+
+### Viewing Results in the Web Portal
+Upon completion, the terminal displays the created **Audit Plan ID** and a direct web URL:
+```text
+========================================================
+🎉 Audit Generation Completed Successfully!
+========================================================
+Audit Plan ID:   cmi1234567890
+Plan Name:       "Q4 2026 Comprehensive Factory Audit"
+Plan Status:     COMPLETED
+Session ID:      cmisess123456
+Total Assets:    1,420
+Verified Items:  1,420 (100%)
+Missing Items:   0 (0%)
+Discrepancies:   0
+========================================================
+👉 View in Web Portal: /audits/cmi1234567890
+```
+Open `/audits` or navigate directly to `/audits/<planId>` to inspect the completed checklist, view analytics, or export the verified status to Excel on `/reports`.
+
+
