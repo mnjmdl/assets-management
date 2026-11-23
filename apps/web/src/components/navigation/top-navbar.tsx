@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import useSWR from 'swr';
 import {
   Bell,
   Search,
@@ -35,6 +36,16 @@ export function TopNavbar() {
     role: 'SUPER_ADMIN',
   });
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Dynamic Company Short Code: fetched from System Settings (A) with env/default fallback (B)
+  const { data: settings } = useSWR<Record<string, string>>('/api/settings', {
+    revalidateOnFocus: false,
+    dedupingInterval: 30000,
+  });
+  const companyCode =
+    settings?.company_code ||
+    process.env.NEXT_PUBLIC_COMPANY_CODE ||
+    'CMBD';
 
   useEffect(() => {
     try {
@@ -102,9 +113,19 @@ export function TopNavbar() {
               className="w-full h-full object-cover"
             />
           </div>
-          <span className="font-bold text-sm sm:text-base leading-tight tracking-tight group-hover:text-primary transition-colors">
-            Assets Management
-          </span>
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <span className="font-bold text-sm sm:text-base leading-tight tracking-tight group-hover:text-primary transition-colors">
+              Assets Management
+            </span>
+            {companyCode && (
+              <span
+                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-bold uppercase tracking-wider bg-primary/10 text-primary border border-primary/20 shadow-xs"
+                title={`Company: ${settings?.company_name || companyCode}`}
+              >
+                {companyCode}
+              </span>
+            )}
+          </div>
         </Link>
 
         {/* Right Actions */}
