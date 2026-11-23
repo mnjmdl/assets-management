@@ -20,7 +20,7 @@ import { theme } from '../config/theme';
 
 export const DashboardScreen = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { user, isOfflineMode, isOnline } = useAuth();
+  const { user, isOfflineMode, isOnline, companyCode } = useAuth();
 
   // Sync summary state
   const [syncSummary, setSyncSummary] = useState({
@@ -113,11 +113,18 @@ export const DashboardScreen = () => {
       <View style={styles.topNavbar}>
         <View style={styles.navBrand}>
           <View style={styles.logoBadge}>
-            <Text style={styles.logoBadgeText}>CM</Text>
+            <Text style={styles.logoBadgeText}>
+              {(companyCode || 'CM').slice(0, 2).toUpperCase()}
+            </Text>
           </View>
           <View>
-            <Text style={styles.brandTitle}>Crystal Martin</Text>
-            <Text style={styles.brandSubtitle}>Asset Management</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.brandTitle}>Assets Management</Text>
+              <View style={styles.companyBadge}>
+                <Text style={styles.companyBadgeText}>{companyCode || 'CMBD'}</Text>
+              </View>
+            </View>
+            <Text style={styles.brandSubtitle}>Asset Lifecycle & Auditing</Text>
           </View>
         </View>
 
@@ -297,6 +304,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: theme.colors.textPrimary,
+  },
+  companyBadge: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 5,
+  },
+  companyBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: theme.colors.primary,
+    letterSpacing: 0.4,
   },
   brandSubtitle: {
     fontSize: 10,

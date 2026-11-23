@@ -17,7 +17,11 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useAuth } from '../context/AuthContext';
 import { theme } from '../config/theme';
-import { DEFAULT_PRODUCTION_API_URL, DEFAULT_LOCAL_API_URL } from '../config/env';
+import {
+  COMPANY_API_PRESETS,
+  DEFAULT_PRODUCTION_API_URL,
+  DEFAULT_LOCAL_API_URL,
+} from '../config/env';
 import {
   runFullSync,
   getSyncSummary,
@@ -27,7 +31,7 @@ import {
 } from '../services/syncManager';
 
 export const ProfileScreen = () => {
-  const { user, isOfflineMode, isOnline, serverUrl, setServerUrl, logout } = useAuth();
+  const { user, isOfflineMode, isOnline, serverUrl, setServerUrl, companyCode, activePreset, logout } = useAuth();
 
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [customUrlInput, setCustomUrlInput] = useState(serverUrl);
@@ -408,8 +412,10 @@ export const ProfileScreen = () => {
             <Text style={styles.infoValue}>Hardware Keystore (SecureStore)</Text>
           </View>
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Organization:</Text>
-            <Text style={styles.infoValue}>Crystal Martin Bangladesh Ltd.</Text>
+            <Text style={styles.infoLabel}>Company / Org:</Text>
+            <Text style={styles.infoValue}>
+              {activePreset ? `${activePreset.name} [${companyCode}]` : companyCode}
+            </Text>
           </View>
         </View>
 
@@ -428,30 +434,50 @@ export const ProfileScreen = () => {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Server Endpoint</Text>
-            <Text style={styles.modalSubtitle}>Choose API environment for this device:</Text>
+            <Text style={styles.modalTitle}>Select Company Server</Text>
+            <Text style={styles.modalSubtitle}>Tap a company to connect, or enter a custom IP:</Text>
 
-            <TouchableOpacity
-              style={[styles.presetButton, isProduction && styles.presetButtonActive]}
-              onPress={() => {
-                setServerUrl(DEFAULT_PRODUCTION_API_URL);
-                setIsServerModalOpen(false);
-              }}
-            >
-              <Text style={styles.presetTitle}>Production IIS Server</Text>
-              <Text style={styles.presetUrl}>{DEFAULT_PRODUCTION_API_URL}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.presetButton, isLocal && styles.presetButtonActive]}
-              onPress={() => {
-                setServerUrl(DEFAULT_LOCAL_API_URL);
-                setIsServerModalOpen(false);
-              }}
-            >
-              <Text style={styles.presetTitle}>Local Development API</Text>
-              <Text style={styles.presetUrl}>{DEFAULT_LOCAL_API_URL}</Text>
-            </TouchableOpacity>
+            {COMPANY_API_PRESETS.map((preset) => {
+              const isActive = serverUrl === preset.url;
+              return (
+                <TouchableOpacity
+                  key={preset.id}
+                  style={[styles.presetButton, isActive && styles.presetButtonActive]}
+                  onPress={() => {
+                    setServerUrl(preset.url, preset.code);
+                    setIsServerModalOpen(false);
+                    Alert.alert('Server Connected', `Switched to ${preset.name} (${preset.code})`);
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={styles.presetTitle}>{preset.name}</Text>
+                    <View
+                      style={{
+                        backgroundColor: isActive ? theme.colors.primary : '#e2e8f0',
+                        paddingHorizontal: 6,
+                        paddingVertical: 1,
+                        borderRadius: 4,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 10,
+                          fontWeight: '700',
+                          color: isActive ? '#ffffff' : theme.colors.textSecondary,
+                        }}
+                      >
+                        {preset.code}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={{ fontSize: 11, color: theme.colors.textMuted, marginBottom: 4 }}>
+                    {preset.description}
+                  </Text>
+                  <Text style={styles.presetUrl}>{preset.url}</Text>
+                </TouchableOpacity>
+              );
+            })}
 
             <View style={styles.customUrlGroup}>
               <Text style={styles.customUrlLabel}>Custom Host / Wi-Fi IP:</Text>

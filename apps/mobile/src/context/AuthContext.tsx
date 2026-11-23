@@ -9,6 +9,9 @@ import {
 import {
   STORAGE_KEYS,
   INITIAL_API_URL,
+  DEFAULT_COMPANY_CODE,
+  getCompanyPresetForUrl,
+  CompanyApiPreset,
 } from '../config/env';
 import {
   startLiveSyncWorker,
@@ -36,7 +39,10 @@ interface AuthContextType {
   isOnline: boolean;
   cachedUser: UserProfile | null;
   serverUrl: string;
-  setServerUrl: (url: string) => Promise<void>;
+  companyCode: string;
+  activePreset?: CompanyApiPreset;
+  setServerUrl: (url: string, newCompanyCode?: string) => Promise<void>;
+  setCompanyCode: (code: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   continueOffline: () => void;
   logout: () => Promise<void>;
@@ -52,6 +58,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [isServerReachable, setIsServerReachable] = useState<boolean>(getIsNetworkOnline());
   const [serverUrl, setServerUrlState] = useState(INITIAL_API_URL);
+  const [companyCode, setCompanyCodeState] = useState(DEFAULT_COMPANY_CODE);
 
   useEffect(() => {
     bootstrapAuth();
@@ -77,15 +84,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const bootstrapAuth = async () => {
     try {
-      // 1. Restore configured server URL
+      // 1. Restore configured server URL & company code
       const savedServerUrl = await storage.getItem(STORAGE_KEYS.SERVER_URL);
-      if (savedServerUrl) {
-        setServerUrlState(savedServerUrl);
-        setApiBaseUrl(savedServerUrl);
+      const activeUrl = savedServerUrl || INITIAL_API_URL;
+      setServerUrlState(activeUrl);
+      setApiBaseUrl(activeUrl);
+
+      const savedCompanyCode = await storage.getItem(STORAGE_KEYS.COMPANY_CODE);
+      if (savedCompanyCode) {
+        setCompanyCodeState(savedCompanyCode);
       } else {
-        setServerUrlState(INITIAL_API_URL);
-        setApiBaseUrl(INITIAL_API_URL);
+        const preset = getCompanyPresetForUrl(activeUrl);
+        if (preset) {
+          setCompanyCodeState(preset.code);
+        }
       }
+
+      // In background, sync live company settings if online
+      apiRequest<any>('/settings', { skipAuth: true, timeoutMs: 3500 })
+        .then(async (res) => {
+          const data = res?.data !== undefined ? res.data : res;
+          if (data && typeof data === 'object' && data.company_code) {
+            setCompanyCodeState(data.company_code);
+            await storage.setItem(STORAGE_KEYS.COMPANY_CODE, data.company_code);
+          }
+        })
+        .catch(() => {});
 
       // 2. Restore cached user profile
       const storedUser = await storage.getObject<UserProfile>(STORAGE_KEYS.CACHED_USER);
@@ -106,13 +130,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const setServerUrl = async (url: string) => {
+  const setServerUrl = async (url: string, newCompanyCode?: string) => {
     const trimmed = url.trim().replace(/\/+$/, '');
     setServerUrlState(trimmed);
     setApiBaseUrl(trimmed);
     await storage.setItem(STORAGE_KEYS.SERVER_URL, trimmed);
+
+    // If newCompanyCode explicitly passed or url matches a known preset
+    let targetCode = newCompanyCode;
+    if (!targetCode) {
+      const preset = getCompanyPresetForUrl(trimmed);
+      if (preset) targetCode = preset.code;
+    }
+
+    if (targetCode) {
+      setCompanyCodeState(targetCode);
+      await storage.setItem(STORAGE_KEYS.COMPANY_CODE, targetCode);
+    }
+
+    // Attempt to refresh live settings from newly selected endpoint
+    apiRequest<any>('/settings', { skipAuth: true, timeoutMs: 3500 })
+      .then(async (res) => {
+        const data = res?.data !== undefined ? res.data : res;
+        if (data && typeof data === 'object' && data.company_code) {
+          setCompanyCodeState(data.company_code);
+          await storage.setItem(STORAGE_KEYS.COMPANY_CODE, data.company_code);
+        }
+      })
+      .catch(() => {});
+
     triggerLiveSync().catch(() => {});
   };
+
+  const setCompanyCode = async (code: string) => {
+    const trimmed = code.trim().toUpperCase();
+    setCompanyCodeState(trimmed);
+    await storage.setItem(STORAGE_KEYS.COMPANY_CODE, trimmed);
+  };
+
+  const activePreset = getCompanyPresetForUrl(serverUrl);
 
   const login = async (email: string, password: string) => {
     const response = await apiRequest<{
@@ -176,7 +232,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isOnline,
         cachedUser,
         serverUrl,
+        companyCode,
+        activePreset,
         setServerUrl,
+        setCompanyCode,
         login,
         continueOffline,
         logout,

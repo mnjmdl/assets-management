@@ -15,11 +15,23 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { DEFAULT_PRODUCTION_API_URL, DEFAULT_LOCAL_API_URL } from '../config/env';
+import {
+  COMPANY_API_PRESETS,
+  DEFAULT_PRODUCTION_API_URL,
+  DEFAULT_LOCAL_API_URL,
+} from '../config/env';
 import { theme } from '../config/theme';
 
 export const LoginScreen = () => {
-  const { login, continueOffline, cachedUser, serverUrl, setServerUrl } = useAuth();
+  const {
+    login,
+    continueOffline,
+    cachedUser,
+    serverUrl,
+    setServerUrl,
+    companyCode,
+    activePreset,
+  } = useAuth();
 
   const isDev = __DEV__ || process.env.EXPO_PUBLIC_SHOW_DEMO_CREDENTIALS === 'true';
 
@@ -72,10 +84,60 @@ export const LoginScreen = () => {
         {/* Brand Header */}
         <View style={styles.header}>
           <View style={styles.logoBadge}>
-            <Text style={styles.monogramText}>CM</Text>
+            <Text style={styles.monogramText}>
+              {(companyCode || 'CM').slice(0, 2).toUpperCase()}
+            </Text>
           </View>
-          <Text style={styles.brandTitle}>Crystal Martin</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+            <Text style={styles.brandTitle}>Assets Management</Text>
+            <View style={styles.companyBadge}>
+              <Text style={styles.companyBadgeText}>{companyCode || 'CMBD'}</Text>
+            </View>
+          </View>
           <Text style={styles.brandSubtitle}>Asset Lifecycle Management & Auditing</Text>
+        </View>
+
+        {/* 3 Company / API Quick Selector */}
+        <View style={styles.companySelectorContainer}>
+          <Text style={styles.companySelectorLabel}>SELECT COMPANY / SERVER:</Text>
+          <View style={styles.companyPillRow}>
+            {COMPANY_API_PRESETS.map((preset) => {
+              const isActive = serverUrl === preset.url;
+              return (
+                <TouchableOpacity
+                  key={preset.id}
+                  style={[styles.companyPill, isActive && styles.companyPillActive]}
+                  onPress={() => setServerUrl(preset.url, preset.code)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.companyPillText, isActive && styles.companyPillTextActive]}>
+                    {preset.code}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+            <TouchableOpacity
+              style={[
+                styles.companyPill,
+                !COMPANY_API_PRESETS.some((p) => p.url === serverUrl) && styles.companyPillActive,
+              ]}
+              onPress={() => {
+                setCustomUrlInput(serverUrl);
+                setIsServerModalOpen(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.companyPillText,
+                  !COMPANY_API_PRESETS.some((p) => p.url === serverUrl) &&
+                    styles.companyPillTextActive,
+                ]}
+              >
+                ⚙ Custom
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Server Target Selector */}
@@ -91,7 +153,7 @@ export const LoginScreen = () => {
             <View style={styles.serverIndicator} />
             <Text style={styles.serverLabel}>Connected Server:</Text>
             <Text style={styles.serverBadge}>
-              {isProduction ? 'PROD' : isLocal ? 'LOCAL' : 'CUSTOM'}
+              {activePreset ? activePreset.code : 'CUSTOM'}
             </Text>
           </View>
           <Text style={styles.serverUrlText} numberOfLines={1} ellipsizeMode="middle">
@@ -214,32 +276,36 @@ export const LoginScreen = () => {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Server Endpoint</Text>
+            <Text style={styles.modalTitle}>Select Company Server</Text>
             <Text style={styles.modalSubtitle}>
-              Choose the API environment for this device:
+              Tap a company to connect, or enter a custom IP:
             </Text>
 
-            <TouchableOpacity
-              style={[styles.presetButton, isProduction && styles.presetButtonActive]}
-              onPress={() => {
-                setServerUrl(DEFAULT_PRODUCTION_API_URL);
-                setIsServerModalOpen(false);
-              }}
-            >
-              <Text style={styles.presetTitle}>Production IIS Server</Text>
-              <Text style={styles.presetUrl}>{DEFAULT_PRODUCTION_API_URL}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.presetButton, isLocal && styles.presetButtonActive]}
-              onPress={() => {
-                setServerUrl(DEFAULT_LOCAL_API_URL);
-                setIsServerModalOpen(false);
-              }}
-            >
-              <Text style={styles.presetTitle}>Local Development API</Text>
-              <Text style={styles.presetUrl}>{DEFAULT_LOCAL_API_URL}</Text>
-            </TouchableOpacity>
+            {COMPANY_API_PRESETS.map((preset) => {
+              const isActive = serverUrl === preset.url;
+              return (
+                <TouchableOpacity
+                  key={preset.id}
+                  style={[styles.presetButton, isActive && styles.presetButtonActive]}
+                  onPress={() => {
+                    setServerUrl(preset.url, preset.code);
+                    setIsServerModalOpen(false);
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.presetHeaderRow}>
+                    <Text style={styles.presetTitle}>{preset.name}</Text>
+                    <View style={[styles.presetBadge, isActive && styles.presetBadgeActive]}>
+                      <Text style={[styles.presetBadgeText, isActive && styles.presetBadgeTextActive]}>
+                        {preset.code}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.presetDescription}>{preset.description}</Text>
+                  <Text style={styles.presetUrl}>{preset.url}</Text>
+                </TouchableOpacity>
+              );
+            })}
 
             <View style={styles.customUrlGroup}>
               <Text style={styles.customUrlLabel}>Custom Host / Wi-Fi IP:</Text>
@@ -300,6 +366,58 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
     ...theme.shadows.card,
+  },
+  companyBadge: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  companyBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: theme.colors.primary,
+    letterSpacing: 0.5,
+  },
+  companySelectorContainer: {
+    marginBottom: 10,
+  },
+  companySelectorLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    color: theme.colors.textMuted,
+    marginBottom: 6,
+    marginLeft: 2,
+  },
+  companyPillRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  companyPill: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: theme.colors.cardBorder,
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...theme.shadows.sm,
+  },
+  companyPillActive: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  companyPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+  },
+  companyPillTextActive: {
+    color: '#ffffff',
   },
   monogramText: {
     fontSize: 22,
@@ -538,15 +656,43 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.primary,
     backgroundColor: theme.colors.primaryLight,
   },
+  presetHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
   presetTitle: {
     fontSize: 13,
     fontWeight: '700',
     color: theme.colors.textPrimary,
-    marginBottom: 2,
+  },
+  presetBadge: {
+    backgroundColor: '#e2e8f0',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  presetBadgeActive: {
+    backgroundColor: theme.colors.primary,
+  },
+  presetBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: theme.colors.textSecondary,
+  },
+  presetBadgeTextActive: {
+    color: '#ffffff',
+  },
+  presetDescription: {
+    fontSize: 11,
+    color: theme.colors.textMuted,
+    marginBottom: 4,
   },
   presetUrl: {
     fontSize: 11,
-    color: theme.colors.textMuted,
+    color: theme.colors.textSecondary,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
   customUrlGroup: {
     marginTop: 6,
