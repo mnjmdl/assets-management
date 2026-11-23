@@ -28,6 +28,7 @@
     "db:admin": "node scripts/create-admin.js",
     "create-admin": "node scripts/create-admin.js",
     "db:auto-audit": "node scripts/auto-audit-verified.js",
+    "db:mark-missing": "node scripts/mark-missing-from-excel.js",
     "db:docker": "docker compose up -d",
     "db:docker:down": "docker compose down",
     "db:studio": "npm run studio --workspace=@repo/database",

@@ -215,6 +215,9 @@ npm run create-admin
 
 # Generate automated completed audit plan (all assets verified)
 npm run db:auto-audit
+
+# Mark missing assets from Excel list (e.g. Lost Assets List.xlsx)
+npm run db:mark-missing
 ```
 
 > **MSSQL Note**: Microsoft SQL Server connector does not support native Prisma enums (enum validation is maintained in `@repo/types` and `@repo/validators`), and multiple cascade paths are handled with explicit `NoAction` rules.

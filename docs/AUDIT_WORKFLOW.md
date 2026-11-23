@@ -264,4 +264,66 @@ Discrepancies:   0
 ```
 Open `/audits` or navigate directly to `/audits/<planId>` to inspect the completed checklist, view analytics, or export the verified status to Excel on `/reports`.
 
+---
+
+## 📉 Bulk Mark Missing Assets from Excel (Discrepancy Reconciliation)
+
+When an external spreadsheet of lost, scrapped, or missing assets is provided (such as `Lost Assets List.xlsx`), you can batch-flag these assets as **`MISSING`** in the active or latest audit checklist using **[`scripts/mark-missing-from-excel.js`](../scripts/mark-missing-from-excel.js)**.
+
+### How It Works
+1. **Excel Parsing**:
+   - Reads `.xlsx` spreadsheets using `ExcelJS`.
+   - Automatically detects column headers (`Asset`, `Asset Code`, `SAP Asset Code`, etc.) or falls back to Column 3 (`Asset`).
+   - Extracts all distinct asset codes (e.g., SAP ERP codes like `212000000000` or physical tag IDs).
+2. **Audit Plan Resolution**:
+   - Auto-targets the **latest audit plan** (or you can specify `--plan <planId>` or `--session <sessionId>`).
+3. **Database & Checklist Matching**:
+   - Matches codes against database records via `sapAssetCode` or `assetCode`.
+   - Resolves target `AuditItem` records inside the audit session(s).
+4. **Batch Updates & Discrepancies**:
+   - Updates matching items to **`status: 'MISSING'`** with custom audit notes.
+   - Automatically generates corresponding **`AuditDiscrepancy`** records (`discrepancyType: 'MISSING'`) so they appear immediately in discrepancy resolution workflows and reports.
+   - Operates in configurable batch chunks (default: 100) to respect MSSQL query parameter limits.
+
+### Command Syntax
+
+```bash
+# 1. Run with defaults (targets "./Lost Assets List.xlsx" & latest audit plan)
+npm run db:mark-missing
+
+# 2. Preview changes without writing to database (Dry Run)
+npm run db:mark-missing -- --dry-run
+
+# 3. Specify a custom Excel file path
+npm run db:mark-missing -- --file "./Lost Assets List.xlsx"
+
+# 4. Target a specific Audit Plan or Session
+npm run db:mark-missing -- --plan <planId>
+npm run db:mark-missing -- --session <sessionId>
+
+# 5. Add custom auditor notes
+npm run db:mark-missing -- --notes "Confirmed lost during 2026 factory floor inventory review"
+
+# 6. View all CLI options
+node scripts/mark-missing-from-excel.js --help
+```
+
+### Execution Output Sample
+```text
+========================================================
+📊 Summary Execution Report
+========================================================
+Audit Plan:          Full Verified Audit - 2026-11-22 17:00 [ID: cmplan123]
+Sessions Targeted:   1
+Total Excel Codes:   1,078
+Assets Matched in DB:1,078
+Codes Not in DB:     0
+Items in Audit:      1,078
+Newly Marked MISSING:1,078
+Already Were MISSING:0
+========================================================
+👉 View updated audit in Web Portal: /audits/cmplan123
+```
+
+
 
