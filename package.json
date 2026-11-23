@@ -20,6 +20,7 @@
     "api:cmbd:dev": "node scripts/run-factory-api.js cmbd --dev",
     "api:cetbd:dev": "node scripts/run-factory-api.js cetbd --dev",
     "api:abl:dev": "node scripts/run-factory-api.js abl --dev",
+    "dev:web": "npm run dev --workspace=@repo/web",
     "start:web": "npm run start --workspace=@repo/web",
     "mobile:start": "npm run start --workspace=@repo/mobile",
     "mobile:android": "npm run android --workspace=@repo/mobile",
