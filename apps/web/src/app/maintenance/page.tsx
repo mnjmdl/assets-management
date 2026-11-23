@@ -1194,7 +1194,7 @@ export default function MaintenancePage() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-foreground">Technician / Vendor Remarks</label>
                   <Input
-                    placeholder="e.g. In-house electrician / Apex Workshop"
+                    placeholder="e.g. In-house electrician / Crystal Workshop"
                     value={formNotes}
                     onChange={(e) => setFormNotes(e.target.value)}
                   />

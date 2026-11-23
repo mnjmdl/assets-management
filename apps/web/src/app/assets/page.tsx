@@ -616,7 +616,7 @@ export default function AssetsPage() {
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <Network className="w-3.5 h-3.5 text-primary shrink-0" />
                         <span className="truncate block">
-                          {asset.location?.name || 'Apex ABL Manufacturing'}
+                          {asset.location?.name || 'Crystal ABL Manufacturing'}
                         </span>
                       </div>
                     </TableCell>

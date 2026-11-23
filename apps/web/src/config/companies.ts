@@ -19,20 +19,20 @@ export const COMPANY_API_PRESETS: CompanyApiPreset[] = [
   },
   {
     id: 'cetbd',
-    name: 'CETBD Enterprise (CETBD)',
+    name: 'CETBD  (CETBD)',
     code: 'CETBD',
     url:
       process.env.NEXT_PUBLIC_CETBD_API_URL ||
-      'http://192.168.65.50:3001/api/v1',
+      'http://192.168.65.50:3003/api/v1',
     description: 'CETBD Factory Operations Server',
   },
   {
     id: 'abl',
-    name: 'Apex / ABL Group (ABL)',
+    name: 'Crystal / ABL (ABL)',
     code: 'ABL',
     url:
       process.env.NEXT_PUBLIC_ABL_API_URL ||
-      'http://192.168.45.51:3001/api/v1',
+      'http://192.168.45.51:3004/api/v1',
     description: 'ABL Factory Operations Server',
   },
 ];
@@ -53,7 +53,7 @@ export function normalizeApiUrl(rawUrl: string): string {
 
 export function getCompanyPreset(codeOrUrl?: string, code?: string): CompanyApiPreset | undefined {
   if (!codeOrUrl && !code) return undefined;
-  
+
   if (code) {
     const exact = COMPANY_API_PRESETS.find(
       (p) => p.code.toUpperCase() === code.trim().toUpperCase()

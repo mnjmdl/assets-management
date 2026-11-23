@@ -108,7 +108,7 @@ async function main() {
       console.log('Creating root company location: ABL Global...');
       rootCompany = await prisma.location.create({
         data: {
-          name: 'Apex ABL Manufacturing',
+          name: 'Crystal ABL Manufacturing',
           code: 'ABL-CORP',
           type: 'COMPANY',
           qrCode: 'LOC:ABL-CORP',

@@ -28,7 +28,7 @@ export const COMPANY_API_PRESETS: CompanyApiPreset[] = [
   },
   {
     id: 'abl',
-    name: 'Apex / ABL Group (ABL)',
+    name: 'Crystal / ABL Group (ABL)',
     code: 'ABL',
     url:
       process.env.EXPO_PUBLIC_ABL_API_URL ||

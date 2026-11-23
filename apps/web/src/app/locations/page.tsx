@@ -513,7 +513,7 @@ export default function LocationsPage() {
                   size="sm"
                   onClick={() => {
                     setNewLocation({
-                      name: 'Apex ABL Manufacturing',
+                      name: 'Crystal ABL Manufacturing',
                       code: 'ABL-CORP',
                       type: 'COMPANY',
                       parentId: '',

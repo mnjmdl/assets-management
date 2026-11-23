@@ -6,7 +6,7 @@
  * Runs the Assets Management NestJS API configured for a specific factory:
  *   - CMBD:  Crystal Martin Bangladesh
  *   - CETBD: CETBD Enterprise
- *   - ABL:   Apex / ABL Group
+ *   - ABL:   Crystal / ABL Group
  * 
  * Usage:
  *   npm run api:cmbd
@@ -60,7 +60,7 @@ const FACTORY_CONFIGS = {
   },
   abl: {
     code: 'ABL',
-    name: 'Apex / ABL Group',
+    name: 'Crystal / ABL Group',
     defaultPort: 3003,
     envFile: '.env.abl',
     defaultDbUrl:

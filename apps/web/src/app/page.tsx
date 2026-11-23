@@ -228,7 +228,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="text-xs text-muted-foreground flex items-center gap-1">
                     <Network className="w-3 h-3 flex-shrink-0" />
-                    <span className="line-clamp-1">{asset.location?.name || 'Apex ABL Manufacturing'}</span>
+                    <span className="line-clamp-1">{asset.location?.name || 'Crystal ABL Manufacturing'}</span>
                   </div>
                 </div>
 

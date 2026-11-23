@@ -215,7 +215,7 @@ export class AssetsService {
     headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
 
     const formatLocation = (loc: any) => {
-      if (!loc) return 'Apex ABL Manufacturing';
+      if (!loc) return 'Crystal ABL Manufacturing';
       const parts: string[] = [];
       let curr = loc;
       while (curr) {
@@ -915,7 +915,7 @@ export class AssetsService {
       if (!rootCompany) {
         rootCompany = await this.prisma.location.create({
           data: {
-            name: 'Apex ABL Manufacturing',
+            name: 'Crystal ABL Manufacturing',
             code: 'ABL-CORP',
             type: 'COMPANY',
             qrCode: 'LOC:ABL-CORP',

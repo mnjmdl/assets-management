@@ -166,7 +166,7 @@ export default function AssetDetailPage({ params }: { params: { id: string } }) 
   };
 
   const buildLocationHierarchy = (loc?: LocationNode | null): string[] => {
-    if (!loc) return ['Apex ABL Manufacturing'];
+    if (!loc) return ['Crystal ABL Manufacturing'];
     const chain: string[] = [];
     let curr: LocationNode | null | undefined = loc;
     while (curr) {
