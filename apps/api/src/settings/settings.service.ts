@@ -5,8 +5,14 @@ import { CreateCategoryDto, UpdateCategoryDto } from './dto/create-category.dto'
 import { CreateUserDto, UpdateUserStatusDto } from './dto/create-user.dto';
 
 const DEFAULT_SETTINGS: Record<string, { value: string; description: string }> = {
-  company_name: { value: 'CMBD Enterprise / ABL Group', description: 'Organization / Company legal name' },
-  company_code: { value: 'CMBD', description: 'Enterprise short code' },
+  company_name: {
+    value: process.env.COMPANY_NAME || 'CMBD Enterprise / ABL Group',
+    description: 'Organization / Company legal name',
+  },
+  company_code: {
+    value: process.env.COMPANY_CODE || 'CMBD',
+    description: 'Enterprise short code',
+  },
   currency: { value: 'USD ($)', description: 'Default system currency display symbol' },
   timezone: { value: 'Asia/Dhaka', description: 'Primary timezone for timestamps and audits' },
   fiscal_year_start: { value: 'July', description: 'Start month of company financial year' },
