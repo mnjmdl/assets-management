@@ -4,12 +4,13 @@ import type { NextRequest } from 'next/server';
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
-  // 1. Allow public static assets, fonts, icons, manifest, service worker, workflow guide, and Next.js internals
+  // 1. Allow public static assets, fonts, icons, uploads, manifest, service worker, workflow guide, and Next.js internals
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/icons') ||
     pathname.startsWith('/manifest') ||
     pathname.startsWith('/workflow') ||
+    pathname.startsWith('/uploads') ||
     pathname === '/sw.js' ||
     pathname === '/offline.html' ||
     pathname === '/favicon.ico' ||

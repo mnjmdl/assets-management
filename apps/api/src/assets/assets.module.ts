@@ -3,26 +3,22 @@ import { AssetsController } from './assets.controller';
 import { AssetsService } from './assets.service';
 import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { extname, join } from 'path';
 import { mkdirSync } from 'fs';
-
-// Ensure upload directories exist
-try {
-  mkdirSync('./uploads/photos', { recursive: true });
-  mkdirSync('./uploads/documents', { recursive: true });
-} catch (e) {
-  // ignore if already exists
-}
 
 @Module({
   imports: [
     MulterModule.register({
       storage: diskStorage({
         destination: (req, file, cb) => {
-          const dest = file.fieldname === 'photos' ? './uploads/photos' : './uploads/documents';
+          const company = (process.env.COMPANY_CODE || 'common').toLowerCase().trim();
+          const subfolder = file.fieldname === 'photos' ? 'photos' : 'documents';
+          const dest = join('uploads', company, subfolder);
+          mkdirSync(dest, { recursive: true });
           cb(null, dest);
         },
         filename: (req, file, cb) => {
+          // Timestamp + random string prevents any file name collisions
           cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${extname(file.originalname)}`);
         },
       }),
