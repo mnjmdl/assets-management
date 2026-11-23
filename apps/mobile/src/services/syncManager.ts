@@ -19,6 +19,7 @@ import {
   syncAllCachedSessions,
   saveCachedSessionItems,
   clearAllLocalData,
+  getUnsyncedOutboxTotalCount,
 } from '../database/db';
 
 export interface SyncProgress {
@@ -595,11 +596,14 @@ export function startLiveSyncWorker(): () => void {
 }
 
 /**
- * Purges all local data when switching to a different company or server.
- * Ensures assets and audits from one company never contaminate another.
+ * Purges local data when switching to a different company or server.
+ * By default, safely preserves unsynced audits (synced = 0) so offline work is never lost.
+ * Pass force: true to wipe absolutely everything.
  */
-export async function purgeLocalDataForCompanySwitch(): Promise<void> {
-  await clearAllLocalData();
+export async function purgeLocalDataForCompanySwitch(options?: { force?: boolean }): Promise<void> {
+  await clearAllLocalData(options);
   notifyOutboxChanged();
 }
+
+export { getUnsyncedOutboxTotalCount };
 

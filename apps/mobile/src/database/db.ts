@@ -188,8 +188,17 @@ export async function getDatabase(): Promise<SQLiteDatabase> {
     if (!existingCols.has('planId')) {
       await db.execAsync('ALTER TABLE offline_audits ADD COLUMN planId TEXT;');
     }
+    if (!existingCols.has('companyCode')) {
+      await db.execAsync('ALTER TABLE offline_audits ADD COLUMN companyCode TEXT;');
+    }
+
+    const sessionTableInfo = await db.getAllAsync<{ name: string }>('PRAGMA table_info(session_audit_items);');
+    const existingSessionCols = new Set(sessionTableInfo.map((col) => col.name));
+    if (!existingSessionCols.has('companyCode')) {
+      await db.execAsync('ALTER TABLE session_audit_items ADD COLUMN companyCode TEXT;');
+    }
   } catch (migErr) {
-    console.warn('[db] Migration error for offline_audits:', migErr);
+    console.warn('[db] Migration error for offline tables:', migErr);
   }
 
   // Create sessionId index after column is guaranteed to exist
@@ -1308,24 +1317,82 @@ export async function markLocalSessionUnscannedAsMissing(
 }
 
 /**
- * Completely purges all local SQLite tables (assets, locations, audit sessions,
- * session items, offline audits, photos, and sync meta).
- * Used when switching companies to prevent cross-company data contamination.
+ * Checks for any pending unsynced offline scans, photos, or checklist items.
  */
-export async function clearAllLocalData(): Promise<void> {
+export async function getUnsyncedOutboxTotalCount(companyCode?: string): Promise<{
+  auditsCount: number;
+  photosCount: number;
+  sessionItemsCount: number;
+  totalUnsynced: number;
+}> {
   try {
     const db = await getDatabase();
-    await db.execAsync(`
-      DELETE FROM session_audit_items;
-      DELETE FROM audit_sessions;
-      DELETE FROM offline_audits;
-      DELETE FROM offline_photos;
-      DELETE FROM assets;
-      DELETE FROM locations;
-      DELETE FROM sync_meta;
-      VACUUM;
-    `);
-    console.log('[db] Local database purged clean for company switch.');
+    const auditsRow = await db.getFirstAsync<{ count: number }>(
+      companyCode
+        ? 'SELECT COUNT(*) as count FROM offline_audits WHERE synced = 0 AND (companyCode = ? OR companyCode IS NULL);'
+        : 'SELECT COUNT(*) as count FROM offline_audits WHERE synced = 0;',
+      companyCode ? [companyCode] : [],
+    );
+    const photosRow = await db.getFirstAsync<{ count: number }>(
+      'SELECT COUNT(*) as count FROM offline_photos WHERE synced = 0;',
+    );
+    const sessionItemsRow = await db.getFirstAsync<{ count: number }>(
+      companyCode
+        ? 'SELECT COUNT(*) as count FROM session_audit_items WHERE synced = 0 AND (companyCode = ? OR companyCode IS NULL);'
+        : 'SELECT COUNT(*) as count FROM session_audit_items WHERE synced = 0;',
+      companyCode ? [companyCode] : [],
+    );
+
+    const auditsCount = auditsRow?.count || 0;
+    const photosCount = photosRow?.count || 0;
+    const sessionItemsCount = sessionItemsRow?.count || 0;
+
+    return {
+      auditsCount,
+      photosCount,
+      sessionItemsCount,
+      totalUnsynced: auditsCount + photosCount + sessionItemsCount,
+    };
+  } catch (err) {
+    console.warn('[db] Error in getUnsyncedOutboxTotalCount:', err);
+    return { auditsCount: 0, photosCount: 0, sessionItemsCount: 0, totalUnsynced: 0 };
+  }
+}
+
+/**
+ * Purges local SQLite data.
+ * @param options.force - If false (default), PRESERVES unsynced audits and session items (synced = 0)
+ *                        so pending offline work is NOT lost when switching companies.
+ *                        Only wipes the cached reference catalog (assets, locations, synced items).
+ *                        If true, wipes absolutely everything.
+ */
+export async function clearAllLocalData(options?: { force?: boolean }): Promise<void> {
+  try {
+    const db = await getDatabase();
+    if (options?.force) {
+      await db.execAsync(`
+        DELETE FROM session_audit_items;
+        DELETE FROM audit_sessions;
+        DELETE FROM offline_audits;
+        DELETE FROM offline_photos;
+        DELETE FROM assets;
+        DELETE FROM locations;
+        DELETE FROM sync_meta;
+        VACUUM;
+      `);
+      console.log('[db] Full local database forced-purged clean.');
+    } else {
+      // Safe purge: keep unsynced outbox records (synced = 0)
+      await db.execAsync(`
+        DELETE FROM session_audit_items WHERE synced = 1;
+        DELETE FROM audit_sessions;
+        DELETE FROM assets;
+        DELETE FROM locations;
+        DELETE FROM sync_meta;
+        VACUUM;
+      `);
+      console.log('[db] Local catalog purged clean (unsynced offline work preserved).');
+    }
   } catch (err) {
     console.warn('[db] Error in clearAllLocalData:', err);
   }

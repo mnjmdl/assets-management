@@ -11,15 +11,21 @@ import {
   ScrollView,
   Modal,
   Image,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import {
   COMPANY_API_PRESETS,
+  CompanyApiPreset,
   DEFAULT_PRODUCTION_API_URL,
   DEFAULT_LOCAL_API_URL,
 } from '../config/env';
+import {
+  getUnsyncedOutboxTotalCount,
+  purgeLocalDataForCompanySwitch,
+} from '../services/syncManager';
 import { theme } from '../config/theme';
 
 export const LoginScreen = () => {
@@ -71,6 +77,44 @@ export const LoginScreen = () => {
     }
   };
 
+  const handleSelectCompanyPreset = async (preset: CompanyApiPreset) => {
+    const isSameCompany = (companyCode || '').toUpperCase() === preset.code.toUpperCase();
+    if (isSameCompany) {
+      await setServerUrl(preset.url, preset.code);
+      return;
+    }
+
+    // Check if there are unsynced offline audits for current company
+    const { totalUnsynced } = await getUnsyncedOutboxTotalCount(companyCode);
+    if (totalUnsynced > 0) {
+      Alert.alert(
+        `⚠️ Unsynced Audits for [${companyCode}]`,
+        `You have ${totalUnsynced} offline audit scan(s) for ${companyCode} that have not been uploaded to the cloud database yet.\n\nWhat would you like to do?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Keep & Switch',
+            onPress: async () => {
+              // Safe switch: keeps unsynced offline audits safely in SQLite
+              await setServerUrl(preset.url, preset.code);
+            },
+          },
+          {
+            text: 'Discard & Switch',
+            style: 'destructive',
+            onPress: async () => {
+              // Force wipe old unsynced audits and switch
+              await purgeLocalDataForCompanySwitch({ force: true });
+              await setServerUrl(preset.url, preset.code);
+            },
+          },
+        ]
+      );
+    } else {
+      await setServerUrl(preset.url, preset.code);
+    }
+  };
+
   const isProduction = serverUrl === DEFAULT_PRODUCTION_API_URL;
   const isLocal = serverUrl === DEFAULT_LOCAL_API_URL;
 
@@ -110,7 +154,7 @@ export const LoginScreen = () => {
                 <TouchableOpacity
                   key={preset.id}
                   style={[styles.companyPill, isActive && styles.companyPillActive]}
-                  onPress={() => setServerUrl(preset.url, preset.code)}
+                  onPress={() => handleSelectCompanyPreset(preset)}
                   activeOpacity={0.8}
                 >
                   <Text style={[styles.companyPillText, isActive && styles.companyPillTextActive]}>
@@ -300,8 +344,8 @@ export const LoginScreen = () => {
                   key={preset.id}
                   style={[styles.presetButton, isActive && styles.presetButtonActive]}
                   onPress={() => {
-                    setServerUrl(preset.url, preset.code);
                     setIsServerModalOpen(false);
+                    handleSelectCompanyPreset(preset);
                   }}
                   activeOpacity={0.85}
                 >

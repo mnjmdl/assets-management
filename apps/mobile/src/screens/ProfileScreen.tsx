@@ -19,6 +19,7 @@ import { useAuth } from '../context/AuthContext';
 import { theme } from '../config/theme';
 import {
   COMPANY_API_PRESETS,
+  CompanyApiPreset,
   DEFAULT_PRODUCTION_API_URL,
   DEFAULT_LOCAL_API_URL,
 } from '../config/env';
@@ -28,6 +29,8 @@ import {
   triggerLiveSync,
   subscribeOutboxChanges,
   isOutboxSyncing,
+  getUnsyncedOutboxTotalCount,
+  purgeLocalDataForCompanySwitch,
 } from '../services/syncManager';
 
 export const ProfileScreen = () => {
@@ -44,6 +47,60 @@ export const ProfileScreen = () => {
       await setServerUrl(customUrlInput.trim());
       setIsServerModalOpen(false);
       Alert.alert('Server Updated', `Active API endpoint set to:\n${customUrlInput.trim()}`);
+    }
+  };
+
+  const handleSelectCompanyPreset = async (preset: CompanyApiPreset) => {
+    const isSameCompany = (companyCode || '').toUpperCase() === preset.code.toUpperCase();
+    if (isSameCompany) {
+      await setServerUrl(preset.url, preset.code);
+      setIsServerModalOpen(false);
+      return;
+    }
+
+    const { totalUnsynced } = await getUnsyncedOutboxTotalCount(companyCode);
+    if (totalUnsynced > 0) {
+      Alert.alert(
+        `⚠️ Unsynced Audits for [${companyCode}]`,
+        `You have ${totalUnsynced} offline audit scan(s) for ${companyCode} that have not been uploaded to the cloud database.\n\nWhat would you like to do?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Keep & Switch',
+            onPress: async () => {
+              await setServerUrl(preset.url, preset.code);
+              setIsServerModalOpen(false);
+              await loadSummary();
+              Alert.alert(
+                'Company Connected',
+                `Connected to ${preset.name} (${preset.code}).\nLocal catalog was refreshed for this company.`,
+              );
+            },
+          },
+          {
+            text: 'Discard & Switch',
+            style: 'destructive',
+            onPress: async () => {
+              await purgeLocalDataForCompanySwitch({ force: true });
+              await setServerUrl(preset.url, preset.code);
+              setIsServerModalOpen(false);
+              await loadSummary();
+              Alert.alert(
+                'Company Connected',
+                `Connected to ${preset.name} (${preset.code}).\nAll local cache was completely cleared.`,
+              );
+            },
+          },
+        ],
+      );
+    } else {
+      await setServerUrl(preset.url, preset.code);
+      setIsServerModalOpen(false);
+      await loadSummary();
+      Alert.alert(
+        'Company Connected',
+        `Connected to ${preset.name} (${preset.code}).\nLocal catalog refreshed clean.`,
+      );
     }
   };
 
@@ -446,15 +503,7 @@ export const ProfileScreen = () => {
                 <TouchableOpacity
                   key={preset.id}
                   style={[styles.presetButton, isActive && styles.presetButtonActive]}
-                  onPress={async () => {
-                    await setServerUrl(preset.url, preset.code);
-                    setIsServerModalOpen(false);
-                    await loadSummary();
-                    Alert.alert(
-                      'Company Connected',
-                      `Connected to ${preset.name} (${preset.code}).\nLocal database was purged clean for this company.`
-                    );
-                  }}
+                  onPress={() => handleSelectCompanyPreset(preset)}
                   activeOpacity={0.85}
                 >
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
