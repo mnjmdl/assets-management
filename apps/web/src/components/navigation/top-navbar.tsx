@@ -15,6 +15,7 @@ import {
   User,
   Shield,
   ChevronDown,
+  Building2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -209,11 +210,16 @@ export function TopNavbar() {
                       </span>
                     </div>
                   </div>
-                  <div className="mt-2 flex items-center gap-1">
+                  <div className="mt-2 flex items-center gap-1.5 flex-wrap">
                     <Badge variant="outline" className="text-[9px] py-0 px-1.5 font-medium border-primary/30 text-primary bg-primary/5">
                       <Shield className="w-2.5 h-2.5 mr-1 inline" />
                       {currentUser.role || 'SUPER_ADMIN'}
                     </Badge>
+                    {companyCode && (
+                      <Badge variant="outline" className="text-[9px] py-0 px-1.5 font-bold uppercase tracking-wider border-border bg-muted/60 text-foreground">
+                        {companyCode}
+                      </Badge>
+                    )}
                   </div>
                 </div>
 
@@ -253,6 +259,18 @@ export function TopNavbar() {
                   >
                     <Boxes className="w-4 h-4 text-muted-foreground" />
                     <span>Assets Inventory</span>
+                  </Link>
+
+                  <Link
+                    href="/login?switch=true"
+                    onClick={() => setIsProfileOpen(false)}
+                    className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-xl text-foreground hover:bg-accent transition-colors"
+                  >
+                    <Building2 className="w-4 h-4 text-primary" />
+                    <span className="flex-1">Switch Company</span>
+                    <Badge variant="outline" className="text-[9px] py-0 px-1 border-primary/30 text-primary">
+                      {companyCode || 'CMBD'}
+                    </Badge>
                   </Link>
                 </div>
 

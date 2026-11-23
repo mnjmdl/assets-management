@@ -26,19 +26,21 @@ export function middleware(request: NextRequest) {
     request.cookies.get('accessToken')?.value ||
     (authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null);
 
-  // 3. Allow public auth endpoints
+  // 3. Allow public auth & health check endpoints
   if (
     pathname.startsWith('/api/auth/login') ||
     pathname.startsWith('/api/auth/register') ||
-    pathname.startsWith('/api/auth/refresh')
+    pathname.startsWith('/api/auth/refresh') ||
+    pathname.startsWith('/api/health')
   ) {
     return NextResponse.next();
   }
 
   // 4. Handle Login Page
   if (pathname === '/login') {
-    // If already authenticated with a valid token, redirect to dashboard
-    if (token) {
+    const isSwitching = request.nextUrl.searchParams.get('switch') === 'true';
+    // If already authenticated with a valid token and not intentionally switching company, redirect to dashboard
+    if (token && !isSwitching) {
       return NextResponse.redirect(new URL('/', request.url));
     }
     return NextResponse.next();

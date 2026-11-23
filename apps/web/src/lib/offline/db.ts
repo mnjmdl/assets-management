@@ -287,4 +287,34 @@ export async function findOfflineAsset(code: string): Promise<OfflineAsset | nul
   });
 }
 
+/**
+ * Get count of pending unsynced offline queue items
+ */
+export async function getUnsyncedQueueCount(): Promise<number> {
+  try {
+    return await getStoreCount('sync_queue');
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Clear all cached offline data across IndexedDB stores.
+ * By default, this clears assets, locations, audit plans, and sessions.
+ * Pass { preserveQueue: true } to retain pending outbox mutations.
+ */
+export async function clearAllLocalOfflineData(options?: { preserveQueue?: boolean }): Promise<void> {
+  try {
+    await Promise.all([
+      clearStore('assets'),
+      clearStore('locations'),
+      clearStore('audit_plans'),
+      clearStore('audit_sessions'),
+      ...(options?.preserveQueue ? [] : [clearStore('sync_queue')]),
+    ]);
+  } catch (err) {
+    console.error('Failed to clear offline DB stores:', err);
+  }
+}
+
 
