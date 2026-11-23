@@ -18,6 +18,15 @@ export const COMPANY_API_PRESETS: CompanyApiPreset[] = [
     description: 'CMBD Factory Production Server',
   },
   {
+    id: 'cetbd',
+    name: 'CETBD Enterprise (CETBD)',
+    code: 'CETBD',
+    url:
+      process.env.EXPO_PUBLIC_CETBD_API_URL ||
+      'http://192.168.65.50:3001/api/v1',
+    description: 'CETBD Factory Operations Server',
+  },
+  {
     id: 'abl',
     name: 'Apex / ABL Group (ABL)',
     code: 'ABL',
@@ -25,16 +34,6 @@ export const COMPANY_API_PRESETS: CompanyApiPreset[] = [
       process.env.EXPO_PUBLIC_ABL_API_URL ||
       'http://192.168.45.51:3001/api/v1',
     description: 'ABL Factory Operations Server',
-  },
-  {
-    id: 'dev',
-    name: 'Local Dev / Testing',
-    code: 'DEV',
-    url:
-      process.env.EXPO_PUBLIC_DEV_API_URL ||
-      process.env.EXPO_PUBLIC_LOCAL_API_URL ||
-      'http://localhost:3001/api/v1',
-    description: 'Local Network or Development Server',
   },
 ];
 
