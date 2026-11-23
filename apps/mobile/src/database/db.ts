@@ -1307,6 +1307,30 @@ export async function markLocalSessionUnscannedAsMissing(
   }
 }
 
+/**
+ * Completely purges all local SQLite tables (assets, locations, audit sessions,
+ * session items, offline audits, photos, and sync meta).
+ * Used when switching companies to prevent cross-company data contamination.
+ */
+export async function clearAllLocalData(): Promise<void> {
+  try {
+    const db = await getDatabase();
+    await db.execAsync(`
+      DELETE FROM session_audit_items;
+      DELETE FROM audit_sessions;
+      DELETE FROM offline_audits;
+      DELETE FROM offline_photos;
+      DELETE FROM assets;
+      DELETE FROM locations;
+      DELETE FROM sync_meta;
+      VACUUM;
+    `);
+    console.log('[db] Local database purged clean for company switch.');
+  } catch (err) {
+    console.warn('[db] Error in clearAllLocalData:', err);
+  }
+}
+
 
 
 

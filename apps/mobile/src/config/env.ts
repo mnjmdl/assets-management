@@ -72,6 +72,7 @@ export const STORAGE_KEYS = {
   CACHED_USER: 'cm_cached_user',
   SERVER_URL: 'cm_server_url',
   COMPANY_CODE: 'cm_company_code',
+  LAST_ACTIVE_COMPANY: 'cm_last_active_company',
   OFFLINE_CREDENTIALS: 'cm_offline_credentials',
 } as const;
 

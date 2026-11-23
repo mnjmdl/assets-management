@@ -18,6 +18,7 @@ import {
   saveCachedSessions,
   syncAllCachedSessions,
   saveCachedSessionItems,
+  clearAllLocalData,
 } from '../database/db';
 
 export interface SyncProgress {
@@ -591,5 +592,14 @@ export function startLiveSyncWorker(): () => void {
       appStateSub = null;
     }
   };
+}
+
+/**
+ * Purges all local data when switching to a different company or server.
+ * Ensures assets and audits from one company never contaminate another.
+ */
+export async function purgeLocalDataForCompanySwitch(): Promise<void> {
+  await clearAllLocalData();
+  notifyOutboxChanged();
 }
 

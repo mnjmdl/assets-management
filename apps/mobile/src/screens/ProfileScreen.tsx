@@ -446,10 +446,14 @@ export const ProfileScreen = () => {
                 <TouchableOpacity
                   key={preset.id}
                   style={[styles.presetButton, isActive && styles.presetButtonActive]}
-                  onPress={() => {
-                    setServerUrl(preset.url, preset.code);
+                  onPress={async () => {
+                    await setServerUrl(preset.url, preset.code);
                     setIsServerModalOpen(false);
-                    Alert.alert('Server Connected', `Switched to ${preset.name} (${preset.code})`);
+                    await loadSummary();
+                    Alert.alert(
+                      'Company Connected',
+                      `Connected to ${preset.name} (${preset.code}).\nLocal database was purged clean for this company.`
+                    );
                   }}
                   activeOpacity={0.85}
                 >

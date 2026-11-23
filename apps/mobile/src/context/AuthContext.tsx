@@ -19,6 +19,7 @@ import {
   subscribeNetworkStatus,
   getIsNetworkOnline,
   checkServerOnline,
+  purgeLocalDataForCompanySwitch,
 } from '../services/syncManager';
 
 export interface UserProfile {
@@ -43,6 +44,7 @@ interface AuthContextType {
   activePreset?: CompanyApiPreset;
   setServerUrl: (url: string, newCompanyCode?: string) => Promise<void>;
   setCompanyCode: (code: string) => Promise<void>;
+  clearLocalData: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   continueOffline: () => void;
   logout: () => Promise<void>;
@@ -143,9 +145,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (preset) targetCode = preset.code;
     }
 
+    // Automatically purge local SQLite data if switching to a different company
+    const prevCompany =
+      (await storage.getItem(STORAGE_KEYS.LAST_ACTIVE_COMPANY)) || companyCode;
+    if (
+      targetCode &&
+      prevCompany &&
+      prevCompany.toUpperCase() !== targetCode.toUpperCase()
+    ) {
+      console.log(
+        `[Auth] Switching company from ${prevCompany} to ${targetCode}. Purging local SQLite data...`,
+      );
+      await purgeLocalDataForCompanySwitch();
+      await storage.removeItem(STORAGE_KEYS.CACHED_USER);
+      setCachedUser(null);
+    }
+
     if (targetCode) {
       setCompanyCodeState(targetCode);
       await storage.setItem(STORAGE_KEYS.COMPANY_CODE, targetCode);
+      await storage.setItem(STORAGE_KEYS.LAST_ACTIVE_COMPANY, targetCode);
     } else {
       // Only refresh live settings if custom endpoint without explicit company code
       apiRequest<any>('/settings', { skipAuth: true, timeoutMs: 3500 })
@@ -154,6 +173,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (data && typeof data === 'object' && data.company_code) {
             setCompanyCodeState(data.company_code);
             await storage.setItem(STORAGE_KEYS.COMPANY_CODE, data.company_code);
+            await storage.setItem(STORAGE_KEYS.LAST_ACTIVE_COMPANY, data.company_code);
           }
         })
         .catch(() => {});
@@ -164,13 +184,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const setCompanyCode = async (code: string) => {
     const trimmed = code.trim().toUpperCase();
+    const prevCompany =
+      (await storage.getItem(STORAGE_KEYS.LAST_ACTIVE_COMPANY)) || companyCode;
+    if (prevCompany && prevCompany.toUpperCase() !== trimmed) {
+      console.log(
+        `[Auth] Company code changed from ${prevCompany} to ${trimmed}. Purging local SQLite data...`,
+      );
+      await purgeLocalDataForCompanySwitch();
+      await storage.removeItem(STORAGE_KEYS.CACHED_USER);
+      setCachedUser(null);
+    }
     setCompanyCodeState(trimmed);
     await storage.setItem(STORAGE_KEYS.COMPANY_CODE, trimmed);
+    await storage.setItem(STORAGE_KEYS.LAST_ACTIVE_COMPANY, trimmed);
   };
 
   const activePreset = getCompanyPresetForUrl(serverUrl, companyCode);
 
   const login = async (email: string, password: string) => {
+    // Purge previous local data if logging into a different company
+    const currentCompany = (companyCode || 'CMBD').toUpperCase();
+    const lastCompany = await storage.getItem(STORAGE_KEYS.LAST_ACTIVE_COMPANY);
+    if (lastCompany && lastCompany.toUpperCase() !== currentCompany) {
+      console.log(
+        `[Auth] Logging into different company (${currentCompany} vs previous ${lastCompany}). Purging local SQLite cache...`,
+      );
+      await purgeLocalDataForCompanySwitch();
+    }
+    await storage.setItem(STORAGE_KEYS.LAST_ACTIVE_COMPANY, currentCompany);
+
     const response = await apiRequest<{
       accessToken: string;
       refreshToken: string;
@@ -236,6 +278,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         activePreset,
         setServerUrl,
         setCompanyCode,
+        clearLocalData: purgeLocalDataForCompanySwitch,
         login,
         continueOffline,
         logout,
