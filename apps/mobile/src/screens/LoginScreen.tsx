@@ -102,7 +102,10 @@ export const LoginScreen = () => {
           <Text style={styles.companySelectorLabel}>SELECT COMPANY / SERVER:</Text>
           <View style={styles.companyPillRow}>
             {COMPANY_API_PRESETS.map((preset) => {
-              const isActive = serverUrl === preset.url;
+              const isActive =
+                (companyCode || '').toUpperCase() === preset.code.toUpperCase() &&
+                serverUrl.trim().replace(/\/+$/, '').toLowerCase() ===
+                  preset.url.trim().replace(/\/+$/, '').toLowerCase();
               return (
                 <TouchableOpacity
                   key={preset.id}
@@ -116,27 +119,33 @@ export const LoginScreen = () => {
                 </TouchableOpacity>
               );
             })}
-            <TouchableOpacity
-              style={[
-                styles.companyPill,
-                !COMPANY_API_PRESETS.some((p) => p.url === serverUrl) && styles.companyPillActive,
-              ]}
-              onPress={() => {
-                setCustomUrlInput(serverUrl);
-                setIsServerModalOpen(true);
-              }}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={[
-                  styles.companyPillText,
-                  !COMPANY_API_PRESETS.some((p) => p.url === serverUrl) &&
-                    styles.companyPillTextActive,
-                ]}
-              >
-                ⚙ Custom
-              </Text>
-            </TouchableOpacity>
+            {(() => {
+              const isCustomActive = !COMPANY_API_PRESETS.some(
+                (p) =>
+                  (companyCode || '').toUpperCase() === p.code.toUpperCase() &&
+                  serverUrl.trim().replace(/\/+$/, '').toLowerCase() ===
+                    p.url.trim().replace(/\/+$/, '').toLowerCase()
+              );
+              return (
+                <TouchableOpacity
+                  style={[styles.companyPill, isCustomActive && styles.companyPillActive]}
+                  onPress={() => {
+                    setCustomUrlInput(serverUrl);
+                    setIsServerModalOpen(true);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.companyPillText,
+                      isCustomActive && styles.companyPillTextActive,
+                    ]}
+                  >
+                    ⚙ Custom
+                  </Text>
+                </TouchableOpacity>
+              );
+            })()}
           </View>
         </View>
 
@@ -282,7 +291,10 @@ export const LoginScreen = () => {
             </Text>
 
             {COMPANY_API_PRESETS.map((preset) => {
-              const isActive = serverUrl === preset.url;
+              const isActive =
+                (companyCode || '').toUpperCase() === preset.code.toUpperCase() &&
+                serverUrl.trim().replace(/\/+$/, '').toLowerCase() ===
+                  preset.url.trim().replace(/\/+$/, '').toLowerCase();
               return (
                 <TouchableOpacity
                   key={preset.id}

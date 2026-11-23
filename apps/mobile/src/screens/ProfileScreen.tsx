@@ -438,7 +438,10 @@ export const ProfileScreen = () => {
             <Text style={styles.modalSubtitle}>Tap a company to connect, or enter a custom IP:</Text>
 
             {COMPANY_API_PRESETS.map((preset) => {
-              const isActive = serverUrl === preset.url;
+              const isActive =
+                (companyCode || '').toUpperCase() === preset.code.toUpperCase() &&
+                serverUrl.trim().replace(/\/+$/, '').toLowerCase() ===
+                  preset.url.trim().replace(/\/+$/, '').toLowerCase();
               return (
                 <TouchableOpacity
                   key={preset.id}

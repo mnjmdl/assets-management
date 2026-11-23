@@ -37,8 +37,20 @@ export const COMPANY_API_PRESETS: CompanyApiPreset[] = [
   },
 ];
 
-export const getCompanyPresetForUrl = (url: string): CompanyApiPreset | undefined => {
+export const getCompanyPresetForUrl = (url: string, code?: string): CompanyApiPreset | undefined => {
   const norm = (url || '').trim().replace(/\/+$/, '').toLowerCase();
+  if (code) {
+    const exact = COMPANY_API_PRESETS.find(
+      (p) =>
+        p.code.toLowerCase() === code.trim().toLowerCase() &&
+        p.url.trim().replace(/\/+$/, '').toLowerCase() === norm
+    );
+    if (exact) return exact;
+    const byCode = COMPANY_API_PRESETS.find(
+      (p) => p.code.toLowerCase() === code.trim().toLowerCase()
+    );
+    if (byCode) return byCode;
+  }
   return COMPANY_API_PRESETS.find(
     (p) => p.url.trim().replace(/\/+$/, '').toLowerCase() === norm
   );

@@ -97,19 +97,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const preset = getCompanyPresetForUrl(activeUrl);
         if (preset) {
           setCompanyCodeState(preset.code);
+        } else {
+          // If no preset matches, attempt to query live settings
+          apiRequest<any>('/settings', { skipAuth: true, timeoutMs: 3500 })
+            .then(async (res) => {
+              const data = res?.data !== undefined ? res.data : res;
+              if (data && typeof data === 'object' && data.company_code) {
+                setCompanyCodeState(data.company_code);
+                await storage.setItem(STORAGE_KEYS.COMPANY_CODE, data.company_code);
+              }
+            })
+            .catch(() => {});
         }
       }
-
-      // In background, sync live company settings if online
-      apiRequest<any>('/settings', { skipAuth: true, timeoutMs: 3500 })
-        .then(async (res) => {
-          const data = res?.data !== undefined ? res.data : res;
-          if (data && typeof data === 'object' && data.company_code) {
-            setCompanyCodeState(data.company_code);
-            await storage.setItem(STORAGE_KEYS.COMPANY_CODE, data.company_code);
-          }
-        })
-        .catch(() => {});
 
       // 2. Restore cached user profile
       const storedUser = await storage.getObject<UserProfile>(STORAGE_KEYS.CACHED_USER);
@@ -146,18 +146,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (targetCode) {
       setCompanyCodeState(targetCode);
       await storage.setItem(STORAGE_KEYS.COMPANY_CODE, targetCode);
+    } else {
+      // Only refresh live settings if custom endpoint without explicit company code
+      apiRequest<any>('/settings', { skipAuth: true, timeoutMs: 3500 })
+        .then(async (res) => {
+          const data = res?.data !== undefined ? res.data : res;
+          if (data && typeof data === 'object' && data.company_code) {
+            setCompanyCodeState(data.company_code);
+            await storage.setItem(STORAGE_KEYS.COMPANY_CODE, data.company_code);
+          }
+        })
+        .catch(() => {});
     }
-
-    // Attempt to refresh live settings from newly selected endpoint
-    apiRequest<any>('/settings', { skipAuth: true, timeoutMs: 3500 })
-      .then(async (res) => {
-        const data = res?.data !== undefined ? res.data : res;
-        if (data && typeof data === 'object' && data.company_code) {
-          setCompanyCodeState(data.company_code);
-          await storage.setItem(STORAGE_KEYS.COMPANY_CODE, data.company_code);
-        }
-      })
-      .catch(() => {});
 
     triggerLiveSync().catch(() => {});
   };
@@ -168,7 +168,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await storage.setItem(STORAGE_KEYS.COMPANY_CODE, trimmed);
   };
 
-  const activePreset = getCompanyPresetForUrl(serverUrl);
+  const activePreset = getCompanyPresetForUrl(serverUrl, companyCode);
 
   const login = async (email: string, password: string) => {
     const response = await apiRequest<{
