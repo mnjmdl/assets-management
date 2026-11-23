@@ -150,9 +150,14 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (rawSettings) {
-      const s = rawSettings?.data || rawSettings;
+      const s = rawSettings?.data !== undefined ? rawSettings.data : rawSettings;
       if (typeof s === 'object' && s !== null) {
-        setSettings((prev) => ({ ...s, ...prev }));
+        setSettings((prev) => ({ ...prev, ...s }));
+        if (s.company_code) {
+          try {
+            localStorage.setItem('company_code', s.company_code);
+          } catch {}
+        }
       }
     }
   }, [rawSettings]);
@@ -218,7 +223,17 @@ export default function SettingsPage() {
       }
 
       const json = await res.json();
-      setSettings(json?.data || json || settings);
+      const updated = json?.data !== undefined ? json.data : (json || settings);
+      setSettings(updated);
+      if (updated?.company_code) {
+        try {
+          localStorage.setItem('company_code', updated.company_code);
+          window.dispatchEvent(
+            new CustomEvent('company_code_changed', { detail: updated.company_code })
+          );
+        } catch {}
+      }
+      await mutateSettings();
       setSaveMessage('Configuration settings saved successfully!');
       setTimeout(() => setSaveMessage(null), 3500);
     } catch (err: any) {

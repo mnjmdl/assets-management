@@ -36,14 +36,45 @@ export function TopNavbar() {
     role: 'SUPER_ADMIN',
   });
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const [localCode, setLocalCode] = useState<string>('');
 
   // Dynamic Company Short Code: fetched from System Settings (A) with env/default fallback (B)
-  const { data: settings } = useSWR<Record<string, string>>('/api/settings', {
-    revalidateOnFocus: false,
-    dedupingInterval: 30000,
+  const { data: rawSettings, mutate: mutateNavbarSettings } = useSWR<any>('/api/settings', {
+    revalidateOnFocus: true,
+    dedupingInterval: 10000,
   });
+
+  // Handle standard { statusCode, data } response envelope from NestJS
+  const settingsData = rawSettings?.data !== undefined ? rawSettings.data : rawSettings;
+
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem('company_code');
+      if (cached) setLocalCode(cached);
+    } catch {}
+
+    const handleCodeChanged = (e: any) => {
+      if (e.detail) {
+        setLocalCode(e.detail);
+        mutateNavbarSettings();
+      }
+    };
+    window.addEventListener('company_code_changed', handleCodeChanged);
+    return () => window.removeEventListener('company_code_changed', handleCodeChanged);
+  }, [mutateNavbarSettings]);
+
+  useEffect(() => {
+    if (settingsData && typeof settingsData === 'object' && settingsData.company_code) {
+      setLocalCode(settingsData.company_code);
+      try {
+        localStorage.setItem('company_code', settingsData.company_code);
+      } catch {}
+    }
+  }, [settingsData]);
+
   const companyCode =
-    settings?.company_code ||
+    localCode ||
+    settingsData?.company_code ||
     process.env.NEXT_PUBLIC_COMPANY_CODE ||
     'CMBD';
 
@@ -120,7 +151,7 @@ export function TopNavbar() {
             {companyCode && (
               <span
                 className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-bold uppercase tracking-wider bg-primary/10 text-primary border border-primary/20 shadow-xs"
-                title={`Company: ${settings?.company_name || companyCode}`}
+                title={`Company: ${settingsData?.company_name || companyCode}`}
               >
                 {companyCode}
               </span>
